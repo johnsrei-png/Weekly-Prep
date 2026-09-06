@@ -339,7 +339,7 @@ export default function MealPlanner() {
             </div>
 
             <div style={{ display: "flex", gap: 10, marginBottom: 20, fontFamily: uiFont, flexWrap: "wrap" }}>
-              <button onClick={() => generateRecipes(7)} disabled={generating} style={{
+              <button onClick={() => generateRecipes(4)} disabled={generating} style={{
                 display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", background: C.clay,
                 color: "#fff", border: "none", borderRadius: 10, cursor: generating ? "wait" : "pointer",
                 fontSize: 14, fontWeight: 600, opacity: generating ? .7 : 1,
