@@ -73,8 +73,8 @@ Sure! Since you've got chicken and lemon on hand, here's a quick one:
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 2000,
+        model: "claude-sonnet-5",
+        max_tokens: 2600,
         system,
         messages,
       }),
