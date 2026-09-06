@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, ChefHat, Sparkles, Minus, AlertTriangle, BookOpen } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen } from "lucide-react";
 import { supabase, getDeviceId } from "./supabase.js";
 
 // ---- Seed recipe bank (used offline / as fallback) ------------------------
@@ -296,10 +296,10 @@ export default function MealPlanner() {
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "28px 20px 60px" }}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
-          <div style={{ background: C.sage, borderRadius: 12, padding: 10, display: "flex" }}><ChefHat size={26} color="#fff" /></div>
+          <div style={{ background: C.sage, borderRadius: 12, padding: 10, display: "flex" }}><Utensils size={26} color="#fff" /></div>
           <div>
-            <h1 style={{ margin: 0, fontSize: 30, letterSpacing: "-0.5px" }}>The Weekly Table</h1>
-            <p style={{ margin: 0, color: C.sub, fontFamily: uiFont, fontSize: 14 }}>Plan meals, track your pantry, shop only for what you need.</p>
+            <h1 style={{ margin: 0, fontSize: 30, letterSpacing: "-0.5px" }}>WeeklyForkast</h1>
+            <p style={{ margin: 0, color: C.sub, fontFamily: uiFont, fontSize: 14 }}>Plan the week, shop the gaps.</p>
           </div>
         </div>
 
