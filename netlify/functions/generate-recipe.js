@@ -31,7 +31,7 @@ Constraints:
 - Dietary preference: ${diet}
 - Target servings per recipe: ${servings}
 - Cuisine hint (optional): ${cuisine || "any"}
-- Do NOT repeat any of these recipe names: ${avoid.join(", ") || "none"}
+- Do NOT repeat any of these recipe names: ${avoid.slice(0, 30).join(", ") || "none"}
 
 Each recipe object must have EXACTLY this shape:
 {
@@ -47,6 +47,7 @@ Each recipe object must have EXACTLY this shape:
 
 Rules:
 - Quantities must be scaled for exactly ${servings} servings.
+- Keep steps brief: 3-5 short steps max per recipe.
 - "unit" may be an empty string for countable items (e.g. 2 lemons).
 - "cat" must be one of: produce, meat, dairy, bakery, pantry.
 - Respond with ONLY the raw JSON array. No markdown, no code fences, no commentary.`;
@@ -61,7 +62,7 @@ Rules:
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 3000,
+        max_tokens: 2000,
         messages: [{ role: "user", content: prompt }],
       }),
     });
