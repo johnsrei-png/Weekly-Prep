@@ -11,6 +11,9 @@
 [functions."generate-recipe"]
   timeout = 26
 
+[functions."chat"]
+  timeout = 26
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
