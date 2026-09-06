@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown } from "lucide-react";
 import { supabase, getDeviceId } from "./supabase.js";
 
 // ---- Seed recipe bank (used offline / as fallback) ------------------------
@@ -95,6 +95,8 @@ export default function MealPlanner() {
   const [addingFor, setAddingFor] = useState(null); // recipe pending day-pick
   const [dragDay, setDragDay] = useState(null);     // day currently being dragged
   const [dragOver, setDragOver] = useState(null);   // day being hovered over
+  const [prefs, setPrefs] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
+  const [prefsOpen, setPrefsOpen] = useState(false);
   const deviceId = useMemo(() => (supabase ? getDeviceId() : null), []);
 
   // ---- Load state (Supabase if configured, else localStorage) -------------
@@ -109,6 +111,7 @@ export default function MealPlanner() {
           if (s.inventory) setInventory(s.inventory);
           if (s.checked) setChecked(s.checked);
           if (s.defaultServings) setDefaultServings(s.defaultServings);
+          if (s.prefs) setPrefs((p) => ({ ...p, ...s.prefs }));
         }
       } else {
         const raw = localStorage.getItem("wt_state");
@@ -119,6 +122,7 @@ export default function MealPlanner() {
           if (s.inventory) setInventory(s.inventory);
           if (s.checked) setChecked(s.checked);
           if (s.defaultServings) setDefaultServings(s.defaultServings);
+          if (s.prefs) setPrefs((p) => ({ ...p, ...s.prefs }));
         }
       }
       setLoaded(true);
@@ -128,13 +132,13 @@ export default function MealPlanner() {
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded) return;
-    const state = { recipes, plan, inventory, checked, defaultServings };
+    const state = { recipes, plan, inventory, checked, defaultServings, prefs };
     if (supabase) {
       supabase.from("meal_planner").upsert({ device_id: deviceId, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, plan, inventory, checked, defaultServings, loaded, deviceId]);
+  }, [recipes, plan, inventory, checked, defaultServings, prefs, loaded, deviceId]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -205,6 +209,7 @@ export default function MealPlanner() {
           pantry: inventory,
           plan: planContext,
           servings: defaultServings,
+          prefs,
         }),
       });
       const data = await resp.json();
@@ -391,22 +396,57 @@ export default function MealPlanner() {
         {/* ---------------- PLAN ---------------- */}
         {tab === "plan" && (
           <div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 16, fontFamily: uiFont }}>
-              <span style={{ fontSize: 14, color: C.sub }}>Preference:</span>
-              {DIETS.map((d) => (
-                <button key={d.id} onClick={() => setDiet(d.id)} style={{
-                  padding: "6px 14px", borderRadius: 20, fontSize: 13, cursor: "pointer", fontWeight: 500,
-                  border: `1px solid ${diet === d.id ? C.sage : C.line}`,
-                  background: diet === d.id ? C.sage : C.cream, color: diet === d.id ? "#fff" : C.ink,
-                }}>{d.label}</button>
-              ))}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12, fontFamily: uiFont }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 14, color: C.sub }}>Servings:</span>
                 <button onClick={() => setDefaultServings(Math.max(1, defaultServings - 1))} style={stepBtn(C)}><Minus size={14} /></button>
                 <span style={{ minWidth: 20, textAlign: "center", fontWeight: 600 }}>{defaultServings}</span>
                 <button onClick={() => setDefaultServings(defaultServings + 1)} style={stepBtn(C)}><Plus size={14} /></button>
               </div>
+              <button onClick={() => setPrefsOpen((o) => !o)} style={{
+                marginLeft: "auto", display: "flex", alignItems: "center", gap: 7, padding: "8px 14px", borderRadius: 10,
+                border: `1px solid ${C.line}`, background: prefsOpen ? C.chip : C.cream, color: C.ink, fontSize: 13, fontWeight: 600, cursor: "pointer",
+              }}>
+                <SlidersHorizontal size={15} /> Food Preferences
+                <ChevronDown size={15} style={{ transform: prefsOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+              </button>
             </div>
+
+            {/* Preferences panel */}
+            {prefsOpen && (
+              <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 16, fontFamily: uiFont }}>
+                <p style={{ margin: "0 0 14px", fontSize: 13, color: C.sub }}>
+                  The assistant uses these on every request \u2014 it'll steer toward what you like and never suggest what you avoid.
+                </p>
+
+                <label style={prefLabel(C)}>Diet</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                  {DIETS.map((d) => (
+                    <button key={d.id} onClick={() => setPrefs({ ...prefs, diet: d.id })} style={{
+                      padding: "6px 14px", borderRadius: 20, fontSize: 13, cursor: "pointer", fontWeight: 500,
+                      border: `1px solid ${prefs.diet === d.id ? C.sage : C.line}`,
+                      background: prefs.diet === d.id ? C.sage : C.bg, color: prefs.diet === d.id ? "#fff" : C.ink,
+                    }}>{d.label}</button>
+                  ))}
+                </div>
+
+                <label style={prefLabel(C)}>Allergies / never include</label>
+                <input value={prefs.avoid} onChange={(e) => setPrefs({ ...prefs, avoid: e.target.value })}
+                  placeholder="e.g. peanuts, shellfish, pork"
+                  style={{ ...inp(C, "1 1 100%"), width: "100%", marginBottom: 16 }} />
+
+                <label style={prefLabel(C)}>Dislikes (avoid if possible)</label>
+                <input value={prefs.dislikes} onChange={(e) => setPrefs({ ...prefs, dislikes: e.target.value })}
+                  placeholder="e.g. cilantro, olives, very spicy food"
+                  style={{ ...inp(C, "1 1 100%"), width: "100%", marginBottom: 16 }} />
+
+                <label style={prefLabel(C)}>Notes for the assistant</label>
+                <textarea value={prefs.notes} onChange={(e) => setPrefs({ ...prefs, notes: e.target.value })}
+                  placeholder="Anything else \u2014 e.g. prefer one-pot meals on weeknights, cooking for 2 adults + 2 kids, love Mediterranean flavors"
+                  rows={3}
+                  style={{ ...inp(C, "1 1 100%"), width: "100%", resize: "vertical", fontFamily: uiFont }} />
+              </div>
+            )}
 
             {/* Chat assistant */}
             <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", marginBottom: 22, fontFamily: uiFont }}>
@@ -663,6 +703,9 @@ function stepBtn(C) {
 }
 function inp(C, flex) {
   return { flex, padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, fontSize: 14, background: C.cream };
+}
+function prefLabel(C) {
+  return { display: "block", fontSize: 12, fontWeight: 700, color: C.sageD, marginBottom: 6 };
 }
 function Empty({ C, icon: Icon, title, sub }) {
   return (
