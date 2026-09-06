@@ -18,7 +18,7 @@ export default async (req) => {
     return json({ error: "Invalid JSON" }, 400);
   }
 
-  const { messages = [], pantry = [], plan = [], servings = 4 } = body;
+  const { messages = [], pantry = [], plan = [], servings = 4, prefs = {} } = body;
 
   const pantryText = pantry.length
     ? pantry.map((p) => `${p.qty}${p.unit ? " " + p.unit : ""} ${p.item}`).join(", ")
@@ -27,14 +27,28 @@ export default async (req) => {
     ? plan.map((p) => `${p.day}: ${p.name}`).join("; ")
     : "(nothing planned yet)";
 
+  const dietLabel = prefs.diet && prefs.diet !== "anything" ? prefs.diet : "no specific diet";
+  const prefLines = [
+    `- Diet: ${dietLabel}`,
+    prefs.avoid ? `- MUST NEVER include (allergies / hard avoids): ${prefs.avoid}` : "",
+    prefs.dislikes ? `- Try to avoid (dislikes): ${prefs.dislikes}` : "",
+    prefs.notes ? `- Other notes: ${prefs.notes}` : "",
+  ].filter(Boolean).join("\n");
+
   const system = `You are a friendly cooking assistant inside a meal-planning app called WeeklyForkast. You help the user plan dinners, use up what they have, and answer cooking questions.
 
 The user's current pantry: ${pantryText}
 The user's current week plan: ${planText}
 Default serving size: ${servings}
 
+The user's food preferences (follow these on EVERY suggestion):
+${prefLines}
+
 Guidelines:
 - Be warm and concise. Talk like a helpful friend who cooks, not a formal chatbot.
+- NEVER suggest a recipe containing anything in the "MUST NEVER include" list. This is a hard safety rule (allergies) — treat it as absolute, and double-check ingredients before proposing anything.
+- Steer away from disliked ingredients unless the user explicitly asks for them in this message.
+- Honor the diet preference and any other notes.
 - When the user wants a recipe, prefer ideas that use their pantry items.
 - You can ask a clarifying question if the request is vague, instead of guessing.
 
