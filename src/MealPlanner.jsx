@@ -53,8 +53,8 @@ const SEED_RECIPES = [
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const MEALS = [{ id: "breakfast", label: "Breakfast" }, { id: "lunch", label: "Lunch" }, { id: "dinner", label: "Dinner" }];
-const CAT_ORDER = ["produce", "meat", "dairy", "bakery", "pantry"];
-const CAT_LABEL = { produce: "Produce", meat: "Meat & Seafood", dairy: "Dairy & Eggs", bakery: "Bakery", pantry: "Pantry & Dry Goods" };
+const CAT_ORDER = ["produce", "meat", "dairy", "bakery", "pantry", "snacks"];
+const CAT_LABEL = { produce: "Produce", meat: "Meat & Seafood", dairy: "Dairy & Eggs", bakery: "Bakery", pantry: "Pantry & Dry Goods", snacks: "Snacks" };
 const DIETS = [
   { id: "anything", label: "Anything" },
   { id: "vegetarian", label: "Vegetarian" },
@@ -72,6 +72,13 @@ function toBase(qty, unit) {
   return { val: qty, base: "count" };
 }
 function norm(s) { return (s || "").trim().toLowerCase(); }
+// Split a freeform snack ("apple + peanut butter", "carrots and hummus") into items.
+function splitSnack(text) {
+  return (text || "")
+    .split(/\s*(?:\+|,|\band\b|\bwith\b|&)\s*/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 function fmtQty(q) {
   const n = Math.round(q * 100) / 100;
   return Number.isInteger(n) ? n : n.toFixed(2).replace(/\.?0+$/, "");
@@ -101,6 +108,7 @@ export default function MealPlanner() {
   const [prefsDraft, setPrefsDraft] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
   const [archives, setArchives] = useState([]);   // [{id, label, savedAt, plan, grocery}]
   const [showArchives, setShowArchives] = useState(false);
+  const [snackInputs, setSnackInputs] = useState({});  // { day: "text being typed" }
   const [prefsSaved, setPrefsSaved] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [household, setHouseholdState] = useState(() => (supabase ? getHousehold() : "local"));
@@ -279,6 +287,33 @@ export default function MealPlanner() {
     setChecked({});
   }
 
+  // ---- Snacks (per day, freeform, optional buy toggle) -------------------
+  function addSnack(day, text) {
+    const t = (text || "").trim();
+    if (!t) return;
+    setPlan((prev) => {
+      const dp = { ...(prev[day] || {}) };
+      const snacks = [...(dp.snacks || []), { text: t, buy: true }];
+      return { ...prev, [day]: { ...dp, snacks } };
+    });
+  }
+  function toggleSnackBuy(day, idx) {
+    setPlan((prev) => {
+      const dp = { ...(prev[day] || {}) };
+      const snacks = (dp.snacks || []).map((s, i) => (i === idx ? { ...s, buy: !s.buy } : s));
+      return { ...prev, [day]: { ...dp, snacks } };
+    });
+  }
+  function removeSnack(day, idx) {
+    setPlan((prev) => {
+      const dp = { ...(prev[day] || {}) };
+      const snacks = (dp.snacks || []).filter((_, i) => i !== idx);
+      if (snacks.length) dp.snacks = snacks; else delete dp.snacks;
+      if (Object.keys(dp).length) return { ...prev, [day]: dp };
+      const next = { ...prev }; delete next[day]; return next;
+    });
+  }
+
   function clearSlot(day, meal) {
     setPlan((prev) => {
       const next = { ...prev };
@@ -366,8 +401,25 @@ export default function MealPlanner() {
 
     const byCat = {};
     needed.forEach((n) => { (byCat[n.cat] ||= []).push(n); });
+
+    // Add snack items that are toggled "buy", split into individual items,
+    // deduped, and skipping anything already in the pantry.
+    const snackItems = {};
+    DAYS.forEach((day) => {
+      (plan[day]?.snacks || []).forEach((sn) => {
+        if (!sn.buy) return;
+        splitSnack(sn.text).forEach((item) => {
+          const key = norm(item);
+          if (!key || invMap[key]) return;      // skip if owned
+          snackItems[key] = item;               // dedupe by normalized name
+        });
+      });
+    });
+    const snackList = Object.values(snackItems).map((item) => ({ item, needQty: 1, unit: "", cat: "snacks", isSnack: true }));
+    if (snackList.length) byCat.snacks = snackList;
+
     return byCat;
-  }, [aggregated, inventory]);
+  }, [aggregated, inventory, plan]);
 
   const totalNeeded = Object.values(groceryList).reduce((a, arr) => a + arr.length, 0);
   const lowStock = inventory.filter((inv) => inv.lowAt && parseFloat(inv.qty) <= parseFloat(inv.lowAt));
@@ -393,6 +445,10 @@ export default function MealPlanner() {
   // ---- Week archive ------------------------------------------------------
   function planIsEmpty() {
     return !Object.values(plan).some((dp) => dp && Object.keys(dp).length);
+  }
+  // helper: does a day have any meal in a slot (ignoring snacks)?
+  function dayHasMeals(dp) {
+    return MEALS.some((m) => dp && dp[m.id]);
   }
 
   function archiveWeek() {
@@ -439,7 +495,7 @@ export default function MealPlanner() {
       const arr = groceryList[cat];
       if (!arr?.length) return;
       txt += CAT_LABEL[cat].toUpperCase() + "\n";
-      arr.forEach((n) => { txt += `  [ ] ${fmtQty(n.needQty)}${n.unit ? " " + n.unit : ""} ${n.item}\n`; });
+      arr.forEach((n) => { txt += n.isSnack ? `  [ ] ${n.item}\n` : `  [ ] ${fmtQty(n.needQty)}${n.unit ? " " + n.unit : ""} ${n.item}\n`; });
       txt += "\n";
     });
     const blob = new Blob([txt], { type: "text/plain" });
@@ -795,6 +851,41 @@ export default function MealPlanner() {
                       );
                     })}
                   </div>
+
+                  {/* Snacks for this day */}
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.line}` }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: (plan[day]?.snacks?.length ? 8 : 0) }}>
+                      <span style={{ width: 74, flexShrink: 0, fontFamily: uiFont, fontSize: 12, fontWeight: 700, color: C.sageD, textTransform: "uppercase", letterSpacing: .5 }}>Snacks</span>
+                      <input
+                        value={snackInputs[day] || ""}
+                        onChange={(e) => setSnackInputs({ ...snackInputs, [day]: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === "Enter") { addSnack(day, snackInputs[day]); setSnackInputs({ ...snackInputs, [day]: "" }); } }}
+                        placeholder="e.g. apple + peanut butter"
+                        style={{ flex: "1 1 160px", padding: "7px 11px", borderRadius: 8, border: `1px solid ${C.line}`, fontSize: 13, background: C.bg, fontFamily: uiFont }}
+                      />
+                      <button onClick={() => { addSnack(day, snackInputs[day]); setSnackInputs({ ...snackInputs, [day]: "" }); }} disabled={!(snackInputs[day] || "").trim()} style={{
+                        display: "flex", alignItems: "center", gap: 5, padding: "7px 12px", borderRadius: 8, border: "none",
+                        background: (snackInputs[day] || "").trim() ? C.sage : C.line, color: (snackInputs[day] || "").trim() ? "#fff" : C.sub,
+                        fontSize: 13, fontWeight: 600, cursor: (snackInputs[day] || "").trim() ? "pointer" : "default", fontFamily: uiFont,
+                      }}><Plus size={14} /> Add</button>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingLeft: 82 }}>
+                      {(plan[day]?.snacks || []).map((sn, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 20, padding: "5px 8px 5px 12px", fontFamily: uiFont }}>
+                          <span style={{ fontSize: 13 }}>{sn.text}</span>
+                          <button onClick={() => toggleSnackBuy(day, i)} title={sn.buy ? "On grocery list — click to skip" : "Not on list — click to add"} style={{
+                            display: "flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 12, border: "none", cursor: "pointer",
+                            background: sn.buy ? C.sage : C.chip, color: sn.buy ? "#fff" : C.sub, fontSize: 11, fontWeight: 600,
+                          }}>
+                            <ShoppingCart size={11} /> {sn.buy ? "on list" : "skip"}
+                          </button>
+                          <button onClick={() => removeSnack(day, i)} title="Remove snack" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 2 }}>
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -873,7 +964,7 @@ export default function MealPlanner() {
                             <div key={key} onClick={() => toggleCheck(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none", cursor: "pointer" }}>
                               <div style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${done ? C.sage : C.line}`, background: done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>{done && <Check size={14} color="#fff" />}</div>
                               <span style={{ fontFamily: uiFont, fontSize: 15, textDecoration: done ? "line-through" : "none", color: done ? C.sub : C.ink }}>
-                                <strong style={{ fontWeight: 600 }}>{fmtQty(n.needQty)}{n.unit ? " " + n.unit : ""}</strong> {n.item}
+                                {n.isSnack ? n.item : <><strong style={{ fontWeight: 600 }}>{fmtQty(n.needQty)}{n.unit ? " " + n.unit : ""}</strong> {n.item}</>}
                               </span>
                             </div>
                           );
