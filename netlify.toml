@@ -3,6 +3,14 @@
   publish = "dist"
   functions = "netlify/functions"
 
+[functions]
+  # Extend the timeout so recipe generation has time to finish.
+  # (Netlify allows up to 26s on the free tier when set explicitly.)
+  node_bundler = "esbuild"
+
+[functions."generate-recipe"]
+  timeout = 26
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
