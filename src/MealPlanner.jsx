@@ -52,6 +52,7 @@ const SEED_RECIPES = [
 ];
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const MEALS = [{ id: "breakfast", label: "Breakfast" }, { id: "dinner", label: "Dinner" }];
 const CAT_ORDER = ["produce", "meat", "dairy", "bakery", "pantry"];
 const CAT_LABEL = { produce: "Produce", meat: "Meat & Seafood", dairy: "Dairy & Eggs", bakery: "Bakery", pantry: "Pantry & Dry Goods" };
 const DIETS = [
@@ -92,7 +93,8 @@ export default function MealPlanner() {
   const [chatLog, setChatLog] = useState([]);   // [{role, content, recipes?}]
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
-  const [addingFor, setAddingFor] = useState(null); // recipe pending day-pick
+  const [addingFor, setAddingFor] = useState(null); // recipe id pending slot-pick
+  const [addMeal, setAddMeal] = useState("dinner");  // chosen meal type in the add flow
   const [dragDay, setDragDay] = useState(null);     // day currently being dragged
   const [dragOver, setDragOver] = useState(null);   // day being hovered over
   const [prefs, setPrefs] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
@@ -104,9 +106,20 @@ export default function MealPlanner() {
   const [showHousehold, setShowHousehold] = useState(false);
 
   // ---- Load state (Supabase keyed by household code, else localStorage) ----
+  function migratePlan(oldPlan) {
+    // Old shape: { Monday: {recipeId, servings} }. New: { Monday: { dinner: {...} } }.
+    const next = {};
+    Object.entries(oldPlan || {}).forEach(([day, val]) => {
+      if (!val) return;
+      if (val.recipeId) next[day] = { dinner: val };   // migrate old entry into Dinner
+      else next[day] = val;                             // already new shape
+    });
+    return next;
+  }
+
   function applyState(s) {
     setRecipes(s.recipes || SEED_RECIPES);
-    setPlan(s.plan || {});
+    setPlan(migratePlan(s.plan));
     setInventory(s.inventory || []);
     setChecked(s.checked || {});
     if (s.defaultServings) setDefaultServings(s.defaultServings);
@@ -198,9 +211,16 @@ export default function MealPlanner() {
     setChatLog(nextLog);
     setChatBusy(true);
     try {
-      const planContext = DAYS.filter((d) => plan[d]).map((d) => {
-        const r = recipes.find((x) => x.id === plan[d].recipeId);
-        return { day: d, name: r?.name || "?" };
+      const planContext = [];
+      DAYS.forEach((d) => {
+        const dp = plan[d];
+        if (!dp) return;
+        MEALS.forEach((m) => {
+          const entry = dp[m.id];
+          if (!entry) return;
+          const r = recipes.find((x) => x.id === entry.recipeId);
+          if (r) planContext.push({ day: d, meal: m.label, name: r.name });
+        });
       });
       const resp = await fetch("/.netlify/functions/chat", {
         method: "POST",
@@ -225,30 +245,43 @@ export default function MealPlanner() {
     }
   }
 
-  function addRecipeToDay(recipe, day) {
+  function addRecipeToSlot(recipe, day, meal) {
     // ensure recipe is saved
     setRecipes((prev) => (prev.find((r) => r.id === recipe.id) ? prev : [recipe, ...prev]));
-    setPlan((prev) => ({ ...prev, [day]: { recipeId: recipe.id, servings: recipe.servings || defaultServings } }));
+    setPlan((prev) => ({
+      ...prev,
+      [day]: { ...(prev[day] || {}), [meal]: { recipeId: recipe.id, servings: recipe.servings || defaultServings } },
+    }));
     setAddingFor(null);
   }
 
-  function moveDay(from, to) {
-    if (from === to) return;
+  // Move (swap) a meal between two slots, each identified as "day|meal".
+  function moveSlot(fromKey, toKey) {
+    if (fromKey === toKey) return;
+    const [fromDay, fromMeal] = fromKey.split("|");
+    const [toDay, toMeal] = toKey.split("|");
     setPlan((prev) => {
       const next = { ...prev };
-      const a = prev[from];
-      const b = prev[to];
-      if (b) next[from] = b; else delete next[from];
-      if (a) next[to] = a; else delete next[to];
+      const fromDP = { ...(prev[fromDay] || {}) };
+      const toDP = fromDay === toDay ? fromDP : { ...(prev[toDay] || {}) };
+      const a = fromDP[fromMeal];
+      const b = toDP[toMeal];
+      if (b) fromDP[fromMeal] = b; else delete fromDP[fromMeal];
+      if (a) toDP[toMeal] = a; else delete toDP[toMeal];
+      // write back, dropping empty day objects
+      if (Object.keys(fromDP).length) next[fromDay] = fromDP; else delete next[fromDay];
+      if (Object.keys(toDP).length) next[toDay] = toDP; else delete next[toDay];
       return next;
     });
     setChecked({});
   }
 
-  function clearDay(day) {
+  function clearSlot(day, meal) {
     setPlan((prev) => {
       const next = { ...prev };
-      delete next[day];
+      const dp = { ...(prev[day] || {}) };
+      delete dp[meal];
+      if (Object.keys(dp).length) next[day] = dp; else delete next[day];
       return next;
     });
     setChecked({});
@@ -278,30 +311,29 @@ export default function MealPlanner() {
     setTimeout(() => setPrefsSaved(false), 2500);
   }
 
-  function setDay(day, recipeId) {
-    const next = { ...plan };
-    if (!recipeId) delete next[day];
-    else next[day] = { recipeId, servings: plan[day]?.servings || defaultServings };
-    setPlan(next);
-  }
-  function setDayServings(day, servings) {
-    if (!plan[day]) return;
-    setPlan({ ...plan, [day]: { ...plan[day], servings: Math.max(1, servings) } });
+  function setSlotServings(day, meal, servings) {
+    const dp = plan[day];
+    if (!dp || !dp[meal]) return;
+    setPlan({ ...plan, [day]: { ...dp, [meal]: { ...dp[meal], servings: Math.max(1, servings) } } });
   }
 
   // ---- Aggregate ingredients (scaled by per-day servings) -----------------
   const aggregated = useMemo(() => {
     const map = {};
     DAYS.forEach((day) => {
-      const entry = plan[day];
-      if (!entry) return;
-      const r = recipes.find((x) => x.id === entry.recipeId);
-      if (!r) return;
-      const scale = (entry.servings || r.servings) / (r.servings || 1);
-      r.ingredients.forEach((ing) => {
-        const key = norm(ing.item) + "|" + ing.unit;
-        if (!map[key]) map[key] = { ...ing, qty: 0 };
-        map[key].qty += ing.qty * scale;
+      const dayPlan = plan[day];
+      if (!dayPlan) return;
+      MEALS.forEach((m) => {
+        const entry = dayPlan[m.id];
+        if (!entry) return;
+        const r = recipes.find((x) => x.id === entry.recipeId);
+        if (!r) return;
+        const scale = (entry.servings || r.servings) / (r.servings || 1);
+        r.ingredients.forEach((ing) => {
+          const key = norm(ing.item) + "|" + ing.unit;
+          if (!map[key]) map[key] = { ...ing, qty: 0 };
+          map[key].qty += ing.qty * scale;
+        });
       });
     });
     return Object.values(map);
@@ -607,16 +639,26 @@ export default function MealPlanner() {
                         </div>
                         {addingFor === r.id ? (
                           <div style={{ marginTop: 10 }}>
-                            <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Add to which day?</div>
+                            <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Which meal?</div>
+                            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                              {MEALS.map((m) => (
+                                <button key={m.id} onClick={() => setAddMeal(m.id)} style={{
+                                  padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 500,
+                                  border: `1px solid ${addMeal === m.id ? C.sage : C.line}`,
+                                  background: addMeal === m.id ? C.sage : C.cream, color: addMeal === m.id ? "#fff" : C.ink,
+                                }}>{m.label}</button>
+                              ))}
+                            </div>
+                            <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Add {MEALS.find((m) => m.id === addMeal)?.label.toLowerCase()} to which day?</div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                               {DAYS.map((d) => (
-                                <button key={d} onClick={() => addRecipeToDay(r, d)} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: C.cream, fontSize: 12, cursor: "pointer" }}>{d.slice(0, 3)}</button>
+                                <button key={d} onClick={() => addRecipeToSlot(r, d, addMeal)} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: C.cream, fontSize: 12, cursor: "pointer" }}>{d.slice(0, 3)}</button>
                               ))}
                               <button onClick={() => setAddingFor(null)} style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: "transparent", color: C.sub, fontSize: 12, cursor: "pointer" }}>cancel</button>
                             </div>
                           </div>
                         ) : (
-                          <button onClick={() => setAddingFor(r.id)} style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                          <button onClick={() => { setAddingFor(r.id); setAddMeal((r.tags || []).includes("breakfast") ? "breakfast" : "dinner"); }} style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                             <CalendarPlus size={14} /> Add to plan
                           </button>
                         )}
@@ -648,62 +690,67 @@ export default function MealPlanner() {
             </div>
 
             <p style={{ fontFamily: uiFont, fontSize: 13, color: C.sub, margin: "0 0 12px" }}>
-              Ask the assistant above for meals and add them to any day. Drag a meal to another day to move it.
+              Ask the assistant above for meals and add them to any day. Drag a meal to another slot to move it.
             </p>
 
             <div style={{ display: "grid", gap: 10 }}>
-              {DAYS.map((day) => {
-                const entry = plan[day];
-                const r = entry && recipes.find((x) => x.id === entry.recipeId);
-                const isOver = dragOver === day && dragDay !== day;
-                return (
-                  <div
-                    key={day}
-                    onDragOver={(e) => { if (dragDay) { e.preventDefault(); setDragOver(day); } }}
-                    onDragLeave={() => setDragOver((d) => (d === day ? null : d))}
-                    onDrop={(e) => { e.preventDefault(); if (dragDay) moveDay(dragDay, day); setDragDay(null); setDragOver(null); }}
-                    style={{
-                      background: isOver ? "#EEF2E8" : C.cream,
-                      border: `${isOver ? 2 : 1}px ${isOver ? "dashed" : "solid"} ${isOver ? C.sage : C.line}`,
-                      borderRadius: 14, padding: "14px 18px", display: "flex", alignItems: "center", gap: 14,
-                      flexWrap: "wrap", transition: "background .12s",
-                    }}
-                  >
-                    <div style={{ width: 92, flexShrink: 0, fontSize: 15, fontWeight: 700 }}>{day}</div>
-
-                    {r ? (
-                      <>
+              {DAYS.map((day) => (
+                <div key={day} style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 18px" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10 }}>{day}</div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {MEALS.map((m) => {
+                      const slotKey = `${day}|${m.id}`;
+                      const entry = plan[day]?.[m.id];
+                      const r = entry && recipes.find((x) => x.id === entry.recipeId);
+                      const isOver = dragOver === slotKey && dragDay !== slotKey;
+                      return (
                         <div
-                          draggable
-                          onDragStart={() => setDragDay(day)}
-                          onDragEnd={() => { setDragDay(null); setDragOver(null); }}
-                          title="Drag to another day"
+                          key={m.id}
+                          onDragOver={(e) => { if (dragDay) { e.preventDefault(); setDragOver(slotKey); } }}
+                          onDragLeave={() => setDragOver((k) => (k === slotKey ? null : k))}
+                          onDrop={(e) => { e.preventDefault(); if (dragDay) moveSlot(dragDay, slotKey); setDragDay(null); setDragOver(null); }}
                           style={{
-                            flex: "1 1 200px", display: "flex", alignItems: "center", gap: 10,
-                            cursor: "grab", opacity: dragDay === day ? .4 : 1,
+                            display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+                            background: isOver ? "#EEF2E8" : C.bg,
+                            border: `${isOver ? 2 : 1}px ${isOver ? "dashed" : "solid"} ${isOver ? C.sage : C.line}`,
+                            borderRadius: 10, padding: "10px 12px", transition: "background .12s",
                           }}
                         >
-                          <GripVertical size={16} color={C.sub} style={{ flexShrink: 0 }} />
-                          <div>
-                            <div style={{ fontSize: 17, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
-                            <div style={{ fontFamily: uiFont, fontSize: 12.5, color: C.sub, marginTop: 2 }}>{r.time} min · {(r.tags || []).filter((t) => t !== "dinner").join(", ")}</div>
-                          </div>
+                          <span style={{ width: 74, flexShrink: 0, fontFamily: uiFont, fontSize: 12, fontWeight: 700, color: C.sageD, textTransform: "uppercase", letterSpacing: .5 }}>{m.label}</span>
+
+                          {r ? (
+                            <>
+                              <div
+                                draggable
+                                onDragStart={() => setDragDay(slotKey)}
+                                onDragEnd={() => { setDragDay(null); setDragOver(null); }}
+                                title="Drag to another slot"
+                                style={{ flex: "1 1 180px", display: "flex", alignItems: "center", gap: 10, cursor: "grab", opacity: dragDay === slotKey ? .4 : 1 }}
+                              >
+                                <GripVertical size={16} color={C.sub} style={{ flexShrink: 0 }} />
+                                <div>
+                                  <div style={{ fontSize: 16, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
+                                  <div style={{ fontFamily: uiFont, fontSize: 12, color: C.sub, marginTop: 1 }}>{r.time} min · {(r.tags || []).filter((t) => t !== "dinner" && t !== "breakfast").join(", ")}</div>
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
+                                <button onClick={() => setSlotServings(day, m.id, (entry.servings || r.servings) - 1)} style={stepBtn(C)}><Minus size={13} /></button>
+                                <span style={{ fontSize: 12.5, minWidth: 50, textAlign: "center", color: C.sub }}>{entry.servings || r.servings} serv</span>
+                                <button onClick={() => setSlotServings(day, m.id, (entry.servings || r.servings) + 1)} style={stepBtn(C)}><Plus size={13} /></button>
+                                <button onClick={() => clearSlot(day, m.id)} title="Remove meal" style={{ ...stepBtn(C), marginLeft: 4 }}><X size={14} /></button>
+                              </div>
+                            </>
+                          ) : (
+                            <span style={{ flex: "1 1 180px", color: C.sub, fontStyle: "italic", fontFamily: uiFont, fontSize: 13.5 }}>
+                              {isOver ? "Drop here" : "Empty — add from chat"}
+                            </span>
+                          )}
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
-                          <button onClick={() => setDayServings(day, (entry.servings || r.servings) - 1)} style={stepBtn(C)}><Minus size={13} /></button>
-                          <span style={{ fontSize: 13, minWidth: 54, textAlign: "center", color: C.sub }}>{entry.servings || r.servings} serv</span>
-                          <button onClick={() => setDayServings(day, (entry.servings || r.servings) + 1)} style={stepBtn(C)}><Plus size={13} /></button>
-                          <button onClick={() => clearDay(day)} title="Remove meal" style={{ ...stepBtn(C), marginLeft: 4 }}><X size={14} /></button>
-                        </div>
-                      </>
-                    ) : (
-                      <span style={{ flex: "1 1 200px", color: C.sub, fontStyle: "italic", fontFamily: uiFont }}>
-                        {isOver ? "Drop here" : "No meal planned"}
-                      </span>
-                    )}
+                      );
+                    })}
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
           </div>
         )}
