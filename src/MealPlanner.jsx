@@ -357,25 +357,45 @@ export default function MealPlanner() {
 
   // ---- Aggregate ingredients (scaled by per-day servings) -----------------
   const aggregated = useMemo(() => {
-    const map = {};
+    // Meal-prep model: each distinct recipe is cooked ONCE per week (one batch
+    // at its own serving size), no matter how many days/slots it appears on.
+    // So we collect the unique set of planned recipe ids, then add each recipe's
+    // ingredients a single time.
+    const usedRecipeIds = new Set();
     DAYS.forEach((day) => {
       const dayPlan = plan[day];
       if (!dayPlan) return;
       MEALS.forEach((m) => {
         const entry = dayPlan[m.id];
-        if (!entry) return;
-        const r = recipes.find((x) => x.id === entry.recipeId);
-        if (!r) return;
-        const scale = (entry.servings || r.servings) / (r.servings || 1);
-        r.ingredients.forEach((ing) => {
-          const key = norm(ing.item) + "|" + ing.unit;
-          if (!map[key]) map[key] = { ...ing, qty: 0 };
-          map[key].qty += ing.qty * scale;
-        });
+        if (entry?.recipeId) usedRecipeIds.add(entry.recipeId);
+      });
+    });
+
+    const map = {};
+    usedRecipeIds.forEach((rid) => {
+      const r = recipes.find((x) => x.id === rid);
+      if (!r) return;
+      const scale = defaultServings / (r.servings || 1);   // match the popup's scaling
+      r.ingredients.forEach((ing) => {
+        const key = norm(ing.item) + "|" + ing.unit;
+        if (!map[key]) map[key] = { ...ing, qty: 0 };
+        map[key].qty += ing.qty * scale;   // one batch, scaled to the chosen serving size
       });
     });
     return Object.values(map);
-  }, [plan, recipes]);
+  }, [plan, recipes, defaultServings]);
+
+  // How many day-slots each recipe fills this week (for the "cooked once, eaten N days" note)
+  const recipeUsage = useMemo(() => {
+    const counts = {};
+    DAYS.forEach((day) => {
+      MEALS.forEach((m) => {
+        const rid = plan[day]?.[m.id]?.recipeId;
+        if (rid) counts[rid] = (counts[rid] || 0) + 1;
+      });
+    });
+    return counts;
+  }, [plan]);
 
   // ---- Grocery list = needed minus pantry (with unit conversion) ----------
   const groceryList = useMemo(() => {
@@ -832,14 +852,14 @@ export default function MealPlanner() {
                                 <GripVertical size={16} color={C.sub} style={{ flexShrink: 0 }} />
                                 <div>
                                   <div style={{ fontSize: 16, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
-                                  <div style={{ fontFamily: uiFont, fontSize: 12, color: C.sub, marginTop: 1 }}>{r.time} min · {(r.tags || []).filter((t) => t !== "dinner" && t !== "breakfast").join(", ")}</div>
+                                  <div style={{ fontFamily: uiFont, fontSize: 12, color: C.sub, marginTop: 1 }}>
+                                    {r.time} min · {defaultServings === (r.servings || defaultServings) ? `makes ${r.servings}` : `scaled to ${defaultServings}`}
+                                    {recipeUsage[r.id] > 1 && ` · eaten ${recipeUsage[r.id]} days (1 batch)`}
+                                  </div>
                                 </div>
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
-                                <button onClick={() => setSlotServings(day, m.id, (entry.servings || r.servings) - 1)} style={stepBtn(C)}><Minus size={13} /></button>
-                                <span style={{ fontSize: 12.5, minWidth: 50, textAlign: "center", color: C.sub }}>{entry.servings || r.servings} serv</span>
-                                <button onClick={() => setSlotServings(day, m.id, (entry.servings || r.servings) + 1)} style={stepBtn(C)}><Plus size={13} /></button>
-                                <button onClick={() => clearSlot(day, m.id)} title="Remove meal" style={{ ...stepBtn(C), marginLeft: 4 }}><X size={14} /></button>
+                                <button onClick={() => clearSlot(day, m.id)} title="Remove meal" style={stepBtn(C)}><X size={14} /></button>
                               </div>
                             </>
                           ) : (
@@ -945,7 +965,7 @@ export default function MealPlanner() {
             ) : (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, fontFamily: uiFont, flexWrap: "wrap", gap: 10 }}>
-                  <span style={{ fontSize: 14, color: C.sub }}>{totalNeeded} items · pantry amounts already deducted</span>
+                  <span style={{ fontSize: 14, color: C.sub }}>{totalNeeded} items · each recipe once, scaled to {defaultServings} servings · pantry deducted</span>
                   <button onClick={exportList} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: C.sage, color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
                     <Download size={16} /> Export
                   </button>
@@ -1019,17 +1039,24 @@ export default function MealPlanner() {
       </div>
 
       {/* Recipe modal */}
-      {viewRecipe && (
+      {viewRecipe && (() => {
+        const baseServings = viewRecipe.servings || 1;
+        const scale = defaultServings / baseServings;
+        const scaled = scale !== 1;
+        return (
         <div onClick={() => setViewRecipe(null)} style={{ position: "fixed", inset: 0, background: "rgba(43,38,32,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, borderRadius: 16, maxWidth: 480, width: "100%", maxHeight: "85vh", overflow: "auto", padding: 26 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <h2 style={{ margin: 0, fontSize: 24 }}>{viewRecipe.name}</h2>
               <button onClick={() => setViewRecipe(null)} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub }}><X size={22} /></button>
             </div>
-            <p style={{ fontFamily: uiFont, fontSize: 13, color: C.sub }}>{viewRecipe.time} min · serves {viewRecipe.servings}</p>
+            <p style={{ fontFamily: uiFont, fontSize: 13, color: C.sub }}>
+              {viewRecipe.time} min · scaled to {defaultServings} {defaultServings === 1 ? "serving" : "servings"}
+              {scaled && <span style={{ color: C.clay }}> (recipe makes {baseServings})</span>}
+            </p>
             <h3 style={{ fontFamily: uiFont, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.sageD }}>Ingredients</h3>
             <ul style={{ fontFamily: uiFont, fontSize: 14, lineHeight: 1.8, paddingLeft: 20 }}>
-              {viewRecipe.ingredients.map((ing, i) => <li key={i}>{fmtQty(ing.qty)}{ing.unit ? " " + ing.unit : ""} {ing.item}</li>)}
+              {viewRecipe.ingredients.map((ing, i) => <li key={i}>{fmtQty(ing.qty * scale)}{ing.unit ? " " + ing.unit : ""} {ing.item}</li>)}
             </ul>
             {viewRecipe.steps?.length > 0 && (
               <>
@@ -1041,7 +1068,8 @@ export default function MealPlanner() {
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
