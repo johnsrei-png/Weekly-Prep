@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown } from "lucide-react";
-import { supabase, getDeviceId } from "./supabase.js";
+=import React, { useState, useEffect, useMemo } from "react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home } from "lucide-react";
+import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 
 // ---- Seed recipe bank (used offline / as fallback) ------------------------
 const SEED_RECIPES = [
@@ -97,48 +97,46 @@ export default function MealPlanner() {
   const [dragOver, setDragOver] = useState(null);   // day being hovered over
   const [prefs, setPrefs] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
   const [prefsOpen, setPrefsOpen] = useState(false);
-  const deviceId = useMemo(() => (supabase ? getDeviceId() : null), []);
+  const [household, setHouseholdState] = useState(() => (supabase ? getHousehold() : "local"));
+  const [codeInput, setCodeInput] = useState("");
+  const [showHousehold, setShowHousehold] = useState(false);
 
-  // ---- Load state (Supabase if configured, else localStorage) -------------
+  // ---- Load state (Supabase keyed by household code, else localStorage) ----
+  function applyState(s) {
+    setRecipes(s.recipes || SEED_RECIPES);
+    setPlan(s.plan || {});
+    setInventory(s.inventory || []);
+    setChecked(s.checked || {});
+    if (s.defaultServings) setDefaultServings(s.defaultServings);
+    setPrefs((p) => ({ ...p, ...(s.prefs || {}) }));
+  }
+
   useEffect(() => {
     (async () => {
+      setLoaded(false);
       if (supabase) {
-        const { data } = await supabase.from("meal_planner").select("*").eq("device_id", deviceId).single();
-        if (data?.state) {
-          const s = data.state;
-          if (s.recipes) setRecipes(s.recipes);
-          if (s.plan) setPlan(s.plan);
-          if (s.inventory) setInventory(s.inventory);
-          if (s.checked) setChecked(s.checked);
-          if (s.defaultServings) setDefaultServings(s.defaultServings);
-          if (s.prefs) setPrefs((p) => ({ ...p, ...s.prefs }));
-        }
+        if (!household) { setLoaded(true); return; } // wait for a code
+        const { data } = await supabase.from("meal_planner").select("*").eq("device_id", household).maybeSingle();
+        if (data?.state) applyState(data.state);
       } else {
         const raw = localStorage.getItem("wt_state");
-        if (raw) {
-          const s = JSON.parse(raw);
-          if (s.recipes) setRecipes(s.recipes);
-          if (s.plan) setPlan(s.plan);
-          if (s.inventory) setInventory(s.inventory);
-          if (s.checked) setChecked(s.checked);
-          if (s.defaultServings) setDefaultServings(s.defaultServings);
-          if (s.prefs) setPrefs((p) => ({ ...p, ...s.prefs }));
-        }
+        if (raw) applyState(JSON.parse(raw));
       }
       setLoaded(true);
     })();
-  }, [deviceId]);
+  }, [household]);
 
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded) return;
     const state = { recipes, plan, inventory, checked, defaultServings, prefs };
     if (supabase) {
-      supabase.from("meal_planner").upsert({ device_id: deviceId, state, updated_at: new Date().toISOString() }).then(() => {});
+      if (!household) return;
+      supabase.from("meal_planner").upsert({ device_id: household, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, plan, inventory, checked, defaultServings, prefs, loaded, deviceId]);
+  }, [recipes, plan, inventory, checked, defaultServings, prefs, loaded, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -253,6 +251,23 @@ export default function MealPlanner() {
     setChecked({});
   }
 
+  // ---- Household ----------------------------------------------------------
+  function joinHousehold(code) {
+    const clean = setHousehold(code);
+    if (!clean) return;
+    setHouseholdState(clean);   // triggers the load effect for this code
+    setCodeInput("");
+    setShowHousehold(false);
+  }
+  function leaveHousehold() {
+    clearHousehold();
+    setHouseholdState("");
+    // reset to a clean slate locally so the next household starts fresh in the UI
+    setRecipes(SEED_RECIPES); setPlan({}); setInventory([]); setChecked({});
+    setPrefs({ diet: "anything", avoid: "", dislikes: "", notes: "" });
+    setShowHousehold(false);
+  }
+
   function setDay(day, recipeId) {
     const next = { ...plan };
     if (!recipeId) delete next[day];
@@ -362,20 +377,91 @@ export default function MealPlanner() {
     </button>
   );
 
-  if (!loaded) return <div style={{ padding: 40, fontFamily: "system-ui", color: "#7A7264" }}>Loading your kitchen…</div>;
-
   const uiFont = "system-ui, -apple-system, sans-serif";
+
+  // Household setup screen (only when Supabase is on and no code joined yet)
+  if (supabase && !household) {
+    return (
+      <div style={{ fontFamily: "Georgia, serif", background: C.bg, minHeight: "100vh", color: C.ink, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <div style={{ maxWidth: 440, width: "100%", background: C.cream, border: `1px solid ${C.line}`, borderRadius: 18, padding: 30 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ background: C.sage, borderRadius: 10, padding: 8, display: "flex" }}><Utensils size={22} color="#fff" /></div>
+            <h1 style={{ margin: 0, fontSize: 26 }}>WeeklyForkast</h1>
+          </div>
+          <p style={{ fontFamily: uiFont, fontSize: 14, color: C.sub, lineHeight: 1.6, marginTop: 0 }}>
+            Enter a household code to open your shared kitchen. Everyone who uses the same code sees the same plan, pantry, and preferences — on any device. Pick a code together and share it.
+          </p>
+          <div style={{ fontFamily: uiFont }}>
+            <input
+              value={codeInput}
+              onChange={(e) => setCodeInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && joinHousehold(codeInput)}
+              placeholder="e.g. smith-family"
+              style={{ width: "100%", padding: "12px 14px", borderRadius: 10, border: `1px solid ${C.line}`, fontSize: 15, background: C.bg, marginBottom: 6 }}
+            />
+            {codeInput && normalizeCode(codeInput) !== codeInput.trim().toLowerCase() && (
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Will be saved as: <strong>{normalizeCode(codeInput)}</strong></div>
+            )}
+            <button onClick={() => joinHousehold(codeInput)} disabled={!normalizeCode(codeInput)} style={{
+              width: "100%", padding: "12px", background: C.sage, color: "#fff", border: "none", borderRadius: 10,
+              fontSize: 15, fontWeight: 700, cursor: normalizeCode(codeInput) ? "pointer" : "not-allowed", opacity: normalizeCode(codeInput) ? 1 : .5, marginBottom: 12,
+            }}>Open kitchen</button>
+            <button onClick={() => setCodeInput(suggestCode())} style={{
+              width: "100%", padding: "10px", background: "transparent", color: C.sageD, border: `1px dashed ${C.line}`, borderRadius: 10,
+              fontSize: 13, cursor: "pointer",
+            }}>Suggest a code for me</button>
+            <p style={{ fontSize: 12, color: C.sub, lineHeight: 1.5, marginTop: 16 }}>
+              Anyone with the code can see and edit this kitchen, so treat it like a shared password. Choose something not easy to guess if you'd like it private.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!loaded) return <div style={{ padding: 40, fontFamily: uiFont, color: "#7A7264" }}>Loading your kitchen…</div>;
 
   return (
     <div style={{ fontFamily: "Georgia, serif", background: C.bg, minHeight: "100vh", color: C.ink }}>
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "28px 20px 60px" }}>
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6, flexWrap: "wrap" }}>
           <div style={{ background: C.sage, borderRadius: 12, padding: 10, display: "flex" }}><Utensils size={26} color="#fff" /></div>
           <div>
             <h1 style={{ margin: 0, fontSize: 30, letterSpacing: "-0.5px" }}>WeeklyForkast</h1>
             <p style={{ margin: 0, color: C.sub, fontFamily: uiFont, fontSize: 14 }}>Plan the week, shop the gaps.</p>
           </div>
+          {supabase && (
+            <div style={{ marginLeft: "auto", position: "relative", fontFamily: uiFont }}>
+              <button onClick={() => setShowHousehold((v) => !v)} style={{
+                display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10,
+                border: `1px solid ${C.line}`, background: C.cream, color: C.ink, fontSize: 13, cursor: "pointer",
+              }}>
+                <Home size={15} color={C.sageD} /> <strong style={{ fontWeight: 600 }}>{household}</strong>
+                <ChevronDown size={14} style={{ transform: showHousehold ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+              </button>
+              {showHousehold && (
+                <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14, width: 260, zIndex: 30, boxShadow: "0 8px 24px rgba(43,38,32,.12)" }}>
+                  <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Shared kitchen code. Anyone using it shares this data.</div>
+                  <input
+                    value={codeInput}
+                    onChange={(e) => setCodeInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && joinHousehold(codeInput)}
+                    placeholder="switch to another code…"
+                    style={{ width: "100%", padding: "9px 11px", borderRadius: 8, border: `1px solid ${C.line}`, fontSize: 13, background: C.bg, marginBottom: 8 }}
+                  />
+                  <button onClick={() => joinHousehold(codeInput)} disabled={!normalizeCode(codeInput)} style={{
+                    width: "100%", padding: "9px", background: C.sage, color: "#fff", border: "none", borderRadius: 8,
+                    fontSize: 13, fontWeight: 600, cursor: normalizeCode(codeInput) ? "pointer" : "not-allowed", opacity: normalizeCode(codeInput) ? 1 : .5, marginBottom: 8,
+                  }}>Switch kitchen</button>
+                  <button onClick={leaveHousehold} style={{
+                    width: "100%", padding: "8px", background: "transparent", color: C.sub, border: `1px solid ${C.line}`, borderRadius: 8,
+                    fontSize: 12.5, cursor: "pointer",
+                  }}>Leave this device</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Low-stock banner */}
@@ -416,7 +502,7 @@ export default function MealPlanner() {
             {prefsOpen && (
               <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 16, fontFamily: uiFont }}>
                 <p style={{ margin: "0 0 14px", fontSize: 13, color: C.sub }}>
-                  The assistant uses these on every request \u2014 it'll steer toward what you like and never suggest what you avoid.
+                  The assistant uses these on every request — it'll steer toward what you like and never suggest what you avoid.
                 </p>
 
                 <label style={prefLabel(C)}>Diet</label>
@@ -442,7 +528,7 @@ export default function MealPlanner() {
 
                 <label style={prefLabel(C)}>Notes for the assistant</label>
                 <textarea value={prefs.notes} onChange={(e) => setPrefs({ ...prefs, notes: e.target.value })}
-                  placeholder="Anything else \u2014 e.g. prefer one-pot meals on weeknights, cooking for 2 adults + 2 kids, love Mediterranean flavors"
+                  placeholder="Anything else — e.g. prefer one-pot meals on weeknights, cooking for 2 adults + 2 kids, love Mediterranean flavors"
                   rows={3}
                   style={{ ...inp(C, "1 1 100%"), width: "100%", resize: "vertical", fontFamily: uiFont }} />
               </div>
