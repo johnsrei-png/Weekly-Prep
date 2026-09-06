@@ -96,6 +96,8 @@ export default function MealPlanner() {
   const [dragDay, setDragDay] = useState(null);     // day currently being dragged
   const [dragOver, setDragOver] = useState(null);   // day being hovered over
   const [prefs, setPrefs] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
+  const [prefsDraft, setPrefsDraft] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
+  const [prefsSaved, setPrefsSaved] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [household, setHouseholdState] = useState(() => (supabase ? getHousehold() : "local"));
   const [codeInput, setCodeInput] = useState("");
@@ -109,6 +111,7 @@ export default function MealPlanner() {
     setChecked(s.checked || {});
     if (s.defaultServings) setDefaultServings(s.defaultServings);
     setPrefs((p) => ({ ...p, ...(s.prefs || {}) }));
+    if (s.prefs) setPrefsDraft((p) => ({ ...p, ...s.prefs }));
   }
 
   useEffect(() => {
@@ -265,7 +268,14 @@ export default function MealPlanner() {
     // reset to a clean slate locally so the next household starts fresh in the UI
     setRecipes(SEED_RECIPES); setPlan({}); setInventory([]); setChecked({});
     setPrefs({ diet: "anything", avoid: "", dislikes: "", notes: "" });
+    setPrefsDraft({ diet: "anything", avoid: "", dislikes: "", notes: "" });
     setShowHousehold(false);
+  }
+
+  function savePrefs() {
+    setPrefs({ ...prefsDraft });   // this write triggers the sync effect
+    setPrefsSaved(true);
+    setTimeout(() => setPrefsSaved(false), 2500);
   }
 
   function setDay(day, recipeId) {
@@ -508,29 +518,52 @@ export default function MealPlanner() {
                 <label style={prefLabel(C)}>Diet</label>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
                   {DIETS.map((d) => (
-                    <button key={d.id} onClick={() => setPrefs({ ...prefs, diet: d.id })} style={{
+                    <button key={d.id} onClick={() => setPrefsDraft({ ...prefsDraft, diet: d.id })} style={{
                       padding: "6px 14px", borderRadius: 20, fontSize: 13, cursor: "pointer", fontWeight: 500,
-                      border: `1px solid ${prefs.diet === d.id ? C.sage : C.line}`,
-                      background: prefs.diet === d.id ? C.sage : C.bg, color: prefs.diet === d.id ? "#fff" : C.ink,
+                      border: `1px solid ${prefsDraft.diet === d.id ? C.sage : C.line}`,
+                      background: prefsDraft.diet === d.id ? C.sage : C.bg, color: prefsDraft.diet === d.id ? "#fff" : C.ink,
                     }}>{d.label}</button>
                   ))}
                 </div>
 
                 <label style={prefLabel(C)}>Allergies / never include</label>
-                <input value={prefs.avoid} onChange={(e) => setPrefs({ ...prefs, avoid: e.target.value })}
+                <input value={prefsDraft.avoid} onChange={(e) => setPrefsDraft({ ...prefsDraft, avoid: e.target.value })}
                   placeholder="e.g. peanuts, shellfish, pork"
                   style={{ ...inp(C, "1 1 100%"), width: "100%", marginBottom: 16 }} />
 
                 <label style={prefLabel(C)}>Dislikes (avoid if possible)</label>
-                <input value={prefs.dislikes} onChange={(e) => setPrefs({ ...prefs, dislikes: e.target.value })}
+                <input value={prefsDraft.dislikes} onChange={(e) => setPrefsDraft({ ...prefsDraft, dislikes: e.target.value })}
                   placeholder="e.g. cilantro, olives, very spicy food"
                   style={{ ...inp(C, "1 1 100%"), width: "100%", marginBottom: 16 }} />
 
                 <label style={prefLabel(C)}>Notes for the assistant</label>
-                <textarea value={prefs.notes} onChange={(e) => setPrefs({ ...prefs, notes: e.target.value })}
+                <textarea value={prefsDraft.notes} onChange={(e) => setPrefsDraft({ ...prefsDraft, notes: e.target.value })}
                   placeholder="Anything else — e.g. prefer one-pot meals on weeknights, cooking for 2 adults + 2 kids, love Mediterranean flavors"
                   rows={3}
-                  style={{ ...inp(C, "1 1 100%"), width: "100%", resize: "vertical", fontFamily: uiFont }} />
+                  style={{ ...inp(C, "1 1 100%"), width: "100%", resize: "vertical", fontFamily: uiFont, marginBottom: 16 }} />
+
+                {(() => {
+                  const dirty = JSON.stringify(prefsDraft) !== JSON.stringify(prefs);
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <button onClick={savePrefs} disabled={!dirty} style={{
+                        display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, border: "none",
+                        background: dirty ? C.sage : C.line, color: dirty ? "#fff" : C.sub, fontSize: 14, fontWeight: 700,
+                        cursor: dirty ? "pointer" : "default",
+                      }}>
+                        <Check size={16} /> Save preferences
+                      </button>
+                      {prefsSaved && (
+                        <span style={{ display: "flex", alignItems: "center", gap: 6, color: C.sage, fontSize: 13, fontWeight: 600 }}>
+                          <Check size={15} /> Preferences saved
+                        </span>
+                      )}
+                      {!prefsSaved && dirty && (
+                        <span style={{ color: C.amber, fontSize: 13 }}>Unsaved changes</span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
