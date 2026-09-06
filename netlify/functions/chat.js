@@ -46,11 +46,13 @@ ${prefLines}
 
 Guidelines:
 - Be warm and concise. Talk like a helpful friend who cooks, not a formal chatbot.
+- You can suggest breakfasts or dinners. If the user asks for breakfast, include "breakfast" in that recipe's tags; for dinner include "dinner". If unclear, default to dinner.
 - NEVER suggest a recipe containing anything in the "MUST NEVER include" list. This is a hard safety rule (allergies) — treat it as absolute, and double-check ingredients before proposing anything.
 - Steer away from disliked ingredients unless the user explicitly asks for them in this message.
 - Honor the diet preference and any other notes.
 - When the user wants a recipe, prefer ideas that use their pantry items.
 - You can ask a clarifying question if the request is vague, instead of guessing.
+- Keep it to at most 3 recipes in a single reply. If the user asks for a full week, suggest a few, then offer to continue — this keeps responses fast and complete.
 
 IMPORTANT OUTPUT FORMAT:
 Whenever you are proposing one or more specific recipes the user could cook, include a fenced code block tagged \`recipes\` containing a JSON array. Put this AFTER your conversational reply. Each recipe object must have EXACTLY this shape:
@@ -88,7 +90,7 @@ Sure! Since you've got chicken and lemon on hand, here's a quick one:
       },
       body: JSON.stringify({
         model: "claude-sonnet-5",
-        max_tokens: 2600,
+        max_tokens: 3200,
         system,
         messages,
       }),
@@ -105,29 +107,63 @@ Sure! Since you've got chicken and lemon on hand, here's a quick one:
       .map((b) => b.text)
       .join("\n");
 
-    // Extract a ```recipes ... ``` block if present.
-    let recipes = [];
-    let reply = fullText;
-    const match = fullText.match(/```recipes\s*([\s\S]*?)```/);
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[1].trim());
-        recipes = (Array.isArray(parsed) ? parsed : [parsed]).map((r, i) => ({
-          id: `chat_${Date.now()}_${i}`,
-          ...r,
-        }));
-      } catch {
-        // If the JSON is malformed, just leave recipes empty; keep the chat text.
-      }
-      // Remove the code block from the visible reply.
-      reply = fullText.replace(/```recipes[\s\S]*?```/, "").trim();
-    }
+    const { reply, recipes } = extractRecipes(fullText);
 
     return json({ reply, recipes });
   } catch (e) {
     return json({ error: "Request failed", detail: String(e) }, 500);
   }
 };
+
+// Pull a recipe JSON array out of the model's reply using several strategies,
+// and return the human-readable text with the JSON removed.
+function extractRecipes(fullText) {
+  const stamp = (arr) =>
+    (Array.isArray(arr) ? arr : [arr]).map((r, i) => ({ id: `chat_${Date.now()}_${i}`, ...r }));
+
+  const tryParse = (str) => {
+    try { return JSON.parse(str.trim()); } catch { return null; }
+  };
+
+  // 1) ```recipes ... ``` (preferred), tolerant of casing/whitespace after the tag.
+  let m = fullText.match(/```[ \t]*recipes[ \t]*\r?\n?([\s\S]*?)```/i);
+  if (m) {
+    const parsed = tryParse(m[1]);
+    if (parsed) return { reply: stripBlock(fullText, m[0]), recipes: stamp(parsed) };
+  }
+
+  // 2) Any fenced block (```json ... ``` or plain ```) that parses as a JSON array.
+  const fences = [...fullText.matchAll(/```[a-z]*\r?\n?([\s\S]*?)```/gi)];
+  for (const f of fences) {
+    const parsed = tryParse(f[1]);
+    if (parsed && (Array.isArray(parsed) || parsed.name)) {
+      return { reply: stripBlock(fullText, f[0]), recipes: stamp(parsed) };
+    }
+  }
+
+  // 3) A bare JSON array sitting in the text (no fence, or truncated fence).
+  const start = fullText.indexOf("[{");
+  if (start !== -1) {
+    // find the matching closing bracket for a best-effort slice
+    const end = fullText.lastIndexOf("}]");
+    if (end > start) {
+      const slice = fullText.slice(start, end + 2);
+      const parsed = tryParse(slice);
+      if (parsed) {
+        const reply = (fullText.slice(0, start) + fullText.slice(end + 2))
+          .replace(/```[a-z]*\s*$/i, "").replace(/```\s*$/i, "").trim();
+        return { reply: reply || "Here you go:", recipes: stamp(parsed) };
+      }
+    }
+  }
+
+  // Nothing parseable — return the text as-is with no recipes.
+  return { reply: fullText.trim(), recipes: [] };
+}
+
+function stripBlock(text, block) {
+  return text.replace(block, "").replace(/```[a-z]*\s*$/i, "").trim();
+}
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
