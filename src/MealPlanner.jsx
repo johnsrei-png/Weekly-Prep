@@ -52,7 +52,7 @@ const SEED_RECIPES = [
 ];
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const MEALS = [{ id: "breakfast", label: "Breakfast" }, { id: "dinner", label: "Dinner" }];
+const MEALS = [{ id: "breakfast", label: "Breakfast" }, { id: "lunch", label: "Lunch" }, { id: "dinner", label: "Dinner" }];
 const CAT_ORDER = ["produce", "meat", "dairy", "bakery", "pantry"];
 const CAT_LABEL = { produce: "Produce", meat: "Meat & Seafood", dairy: "Dairy & Eggs", bakery: "Bakery", pantry: "Pantry & Dry Goods" };
 const DIETS = [
