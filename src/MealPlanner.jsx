@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus } from "lucide-react";
 import { supabase, getDeviceId } from "./supabase.js";
 
 // ---- Seed recipe bank (used offline / as fallback) ------------------------
@@ -89,6 +89,10 @@ export default function MealPlanner() {
   const [genError, setGenError] = useState("");
   const [newInv, setNewInv] = useState({ item: "", qty: "", unit: "oz", lowAt: "" });
   const [viewRecipe, setViewRecipe] = useState(null);
+  const [chatLog, setChatLog] = useState([]);   // [{role, content, recipes?}]
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [addingFor, setAddingFor] = useState(null); // recipe pending day-pick
   const deviceId = useMemo(() => (supabase ? getDeviceId() : null), []);
 
   // ---- Load state (Supabase if configured, else localStorage) -------------
@@ -176,6 +180,48 @@ export default function MealPlanner() {
     });
     setPlan(next);
     setChecked({});
+  }
+
+  // ---- Chat --------------------------------------------------------------
+  async function sendChat(text) {
+    const msg = (text ?? chatInput).trim();
+    if (!msg || chatBusy) return;
+    setChatInput("");
+    const nextLog = [...chatLog, { role: "user", content: msg }];
+    setChatLog(nextLog);
+    setChatBusy(true);
+    try {
+      const planContext = DAYS.filter((d) => plan[d]).map((d) => {
+        const r = recipes.find((x) => x.id === plan[d].recipeId);
+        return { day: d, name: r?.name || "?" };
+      });
+      const resp = await fetch("/.netlify/functions/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: nextLog.map((m) => ({ role: m.role, content: m.content })),
+          pantry: inventory,
+          plan: planContext,
+          servings: defaultServings,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Chat failed");
+      const fresh = data.recipes || [];
+      if (fresh.length) setRecipes((prev) => [...fresh, ...prev]);
+      setChatLog([...nextLog, { role: "assistant", content: data.reply || "…", recipes: fresh }]);
+    } catch (e) {
+      setChatLog([...nextLog, { role: "assistant", content: `Sorry — something went wrong: ${e.message}. Check that the chat function and API key are set up.`, recipes: [] }]);
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  function addRecipeToDay(recipe, day) {
+    // ensure recipe is saved
+    setRecipes((prev) => (prev.find((r) => r.id === recipe.id) ? prev : [recipe, ...prev]));
+    setPlan((prev) => ({ ...prev, [day]: { recipeId: recipe.id, servings: recipe.servings || defaultServings } }));
+    setAddingFor(null);
   }
 
   function setDay(day, recipeId) {
@@ -338,14 +384,87 @@ export default function MealPlanner() {
               </div>
             </div>
 
+            {/* Chat assistant */}
+            <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", marginBottom: 22, fontFamily: uiFont }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", borderBottom: `1px solid ${C.line}`, background: C.chip }}>
+                <MessageCircle size={17} color={C.sageD} />
+                <span style={{ fontWeight: 700, fontSize: 14 }}>Ask WeeklyForkast</span>
+                <span style={{ fontSize: 12, color: C.sub, marginLeft: "auto" }}>knows your pantry & plan</span>
+              </div>
+
+              <div style={{ maxHeight: 340, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+                {chatLog.length === 0 && (
+                  <div style={{ color: C.sub, fontSize: 14, lineHeight: 1.6 }}>
+                    Ask for a recipe and I'll suggest one you can drop straight into your week. Try:
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                      {["Something quick with what I have", "A vegetarian dinner for tonight", "Use up my chicken before it goes bad"].map((s) => (
+                        <button key={s} onClick={() => sendChat(s)} style={{ padding: "6px 12px", borderRadius: 16, border: `1px solid ${C.line}`, background: C.bg, color: C.ink, fontSize: 12.5, cursor: "pointer" }}>{s}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {chatLog.map((m, i) => (
+                  <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%" }}>
+                    <div style={{
+                      padding: "10px 14px", borderRadius: 14, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap",
+                      background: m.role === "user" ? C.sage : C.bg, color: m.role === "user" ? "#fff" : C.ink,
+                      border: m.role === "user" ? "none" : `1px solid ${C.line}`,
+                    }}>{m.content}</div>
+
+                    {/* recipe cards from assistant */}
+                    {m.role === "assistant" && m.recipes?.map((r) => (
+                      <div key={r.id} style={{ marginTop: 8, border: `1px solid ${C.sage}`, borderRadius: 12, padding: "12px 14px", background: "#F6F8F3" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: 15 }}>{r.name}</div>
+                            <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>{r.time} min · serves {r.servings} · {(r.tags || []).filter((t) => t !== "dinner").join(", ")}</div>
+                          </div>
+                          <button onClick={() => setViewRecipe(r)} style={{ fontSize: 12, color: C.sageD, background: "none", border: "none", cursor: "pointer", textDecoration: "underline", flexShrink: 0 }}>view</button>
+                        </div>
+                        {addingFor === r.id ? (
+                          <div style={{ marginTop: 10 }}>
+                            <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Add to which day?</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              {DAYS.map((d) => (
+                                <button key={d} onClick={() => addRecipeToDay(r, d)} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: C.cream, fontSize: 12, cursor: "pointer" }}>{d.slice(0, 3)}</button>
+                              ))}
+                              <button onClick={() => setAddingFor(null)} style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: "transparent", color: C.sub, fontSize: 12, cursor: "pointer" }}>cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button onClick={() => setAddingFor(r.id)} style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                            <CalendarPlus size={14} /> Add to plan
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+
+                {chatBusy && <div style={{ alignSelf: "flex-start", color: C.sub, fontSize: 13, fontStyle: "italic" }}>WeeklyForkast is thinking…</div>}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, padding: 12, borderTop: `1px solid ${C.line}` }}>
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && sendChat()}
+                  placeholder="Ask for a recipe…"
+                  disabled={chatBusy}
+                  style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.line}`, fontSize: 14, background: C.bg }}
+                />
+                <button onClick={() => sendChat()} disabled={chatBusy || !chatInput.trim()} style={{
+                  display: "flex", alignItems: "center", gap: 6, padding: "10px 16px", background: C.clay, color: "#fff",
+                  border: "none", borderRadius: 10, cursor: chatBusy ? "wait" : "pointer", fontSize: 14, fontWeight: 600,
+                  opacity: (chatBusy || !chatInput.trim()) ? .6 : 1,
+                }}>
+                  <Send size={15} /> Send
+                </button>
+              </div>
+            </div>
+
             <div style={{ display: "flex", gap: 10, marginBottom: 20, fontFamily: uiFont, flexWrap: "wrap" }}>
-              <button onClick={() => generateRecipes(4)} disabled={generating} style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", background: C.clay,
-                color: "#fff", border: "none", borderRadius: 10, cursor: generating ? "wait" : "pointer",
-                fontSize: 14, fontWeight: 600, opacity: generating ? .7 : 1,
-              }}>
-                <Sparkles size={16} /> {generating ? "Cooking up recipes…" : "Generate New Recipes (AI)"}
-              </button>
               <button onClick={generateFromExisting} style={{
                 display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", background: C.cream,
                 color: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 600,
@@ -353,7 +472,6 @@ export default function MealPlanner() {
                 <RefreshCw size={16} /> Shuffle Saved Recipes
               </button>
             </div>
-            {genError && <div style={{ color: "#B4442E", fontFamily: uiFont, fontSize: 13, marginBottom: 16 }}>Couldn't generate: {genError}. Check that the Netlify function and API key are set up.</div>}
 
             <div style={{ display: "grid", gap: 10 }}>
               {DAYS.map((day) => {
