@@ -397,6 +397,24 @@ export default function MealPlanner() {
     return counts;
   }, [plan]);
 
+  // Assign a stable color to each recipe that appears on more than one slot,
+  // so matching (batch-shared) meals are easy to spot at a glance.
+  const recipeColors = useMemo(() => {
+    const palette = ["#C67B4E", "#6B7B5A", "#4E7A8A", "#A6584F", "#8A6D3B", "#7A5C86", "#4F8A6B", "#B5793F"];
+    // order recipe ids by first appearance in the week for consistent coloring
+    const order = [];
+    DAYS.forEach((day) => MEALS.forEach((m) => {
+      const rid = plan[day]?.[m.id]?.recipeId;
+      if (rid && !order.includes(rid)) order.push(rid);
+    }));
+    const map = {};
+    let i = 0;
+    order.forEach((rid) => {
+      if (recipeUsage[rid] > 1) { map[rid] = palette[i % palette.length]; i++; }
+    });
+    return map;
+  }, [plan, recipeUsage]);
+
   // ---- Grocery list = needed minus pantry (with unit conversion) ----------
   const groceryList = useMemo(() => {
     const invMap = {};
@@ -825,6 +843,7 @@ export default function MealPlanner() {
                       const entry = plan[day]?.[m.id];
                       const r = entry && recipes.find((x) => x.id === entry.recipeId);
                       const isOver = dragOver === slotKey && dragDay !== slotKey;
+                      const rColor = r ? recipeColors[r.id] : null;
                       return (
                         <div
                           key={m.id}
@@ -833,8 +852,9 @@ export default function MealPlanner() {
                           onDrop={(e) => { e.preventDefault(); if (dragDay) moveSlot(dragDay, slotKey); setDragDay(null); setDragOver(null); }}
                           style={{
                             display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-                            background: isOver ? "#EEF2E8" : C.bg,
+                            background: isOver ? "#EEF2E8" : (rColor ? rColor + "14" : C.bg),
                             border: `${isOver ? 2 : 1}px ${isOver ? "dashed" : "solid"} ${isOver ? C.sage : C.line}`,
+                            borderLeft: rColor ? `4px solid ${rColor}` : `${isOver ? 2 : 1}px ${isOver ? "dashed" : "solid"} ${isOver ? C.sage : C.line}`,
                             borderRadius: 10, padding: "10px 12px", transition: "background .12s",
                           }}
                         >
@@ -851,7 +871,10 @@ export default function MealPlanner() {
                               >
                                 <GripVertical size={16} color={C.sub} style={{ flexShrink: 0 }} />
                                 <div>
-                                  <div style={{ fontSize: 16, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
+                                  <div style={{ fontSize: 16, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3, display: "flex", alignItems: "center", gap: 7 }} onClick={() => setViewRecipe(r)}>
+                                    {rColor && <span style={{ width: 9, height: 9, borderRadius: "50%", background: rColor, flexShrink: 0 }} />}
+                                    {r.name}
+                                  </div>
                                   <div style={{ fontFamily: uiFont, fontSize: 12, color: C.sub, marginTop: 1 }}>
                                     {r.time} min · {defaultServings === (r.servings || defaultServings) ? `makes ${r.servings}` : `scaled to ${defaultServings}`}
                                     {recipeUsage[r.id] > 1 && ` · eaten ${recipeUsage[r.id]} days (1 batch)`}
