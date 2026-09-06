@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical } from "lucide-react";
 import { supabase, getDeviceId } from "./supabase.js";
 
 // ---- Seed recipe bank (used offline / as fallback) ------------------------
@@ -93,6 +93,8 @@ export default function MealPlanner() {
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [addingFor, setAddingFor] = useState(null); // recipe pending day-pick
+  const [dragDay, setDragDay] = useState(null);     // day currently being dragged
+  const [dragOver, setDragOver] = useState(null);   // day being hovered over
   const deviceId = useMemo(() => (supabase ? getDeviceId() : null), []);
 
   // ---- Load state (Supabase if configured, else localStorage) -------------
@@ -222,6 +224,28 @@ export default function MealPlanner() {
     setRecipes((prev) => (prev.find((r) => r.id === recipe.id) ? prev : [recipe, ...prev]));
     setPlan((prev) => ({ ...prev, [day]: { recipeId: recipe.id, servings: recipe.servings || defaultServings } }));
     setAddingFor(null);
+  }
+
+  function moveDay(from, to) {
+    if (from === to) return;
+    setPlan((prev) => {
+      const next = { ...prev };
+      const a = prev[from];
+      const b = prev[to];
+      if (b) next[from] = b; else delete next[from];
+      if (a) next[to] = a; else delete next[to];
+      return next;
+    });
+    setChecked({});
+  }
+
+  function clearDay(day) {
+    setPlan((prev) => {
+      const next = { ...prev };
+      delete next[day];
+      return next;
+    });
+    setChecked({});
   }
 
   function setDay(day, recipeId) {
@@ -464,41 +488,60 @@ export default function MealPlanner() {
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, marginBottom: 20, fontFamily: uiFont, flexWrap: "wrap" }}>
-              <button onClick={generateFromExisting} style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", background: C.cream,
-                color: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 600,
-              }}>
-                <RefreshCw size={16} /> Shuffle Saved Recipes
-              </button>
-            </div>
+            <p style={{ fontFamily: uiFont, fontSize: 13, color: C.sub, margin: "0 0 12px" }}>
+              Ask the assistant above for meals and add them to any day. Drag a meal to another day to move it.
+            </p>
 
             <div style={{ display: "grid", gap: 10 }}>
               {DAYS.map((day) => {
                 const entry = plan[day];
                 const r = entry && recipes.find((x) => x.id === entry.recipeId);
+                const isOver = dragOver === day && dragDay !== day;
                 return (
-                  <div key={day} style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 18px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                  <div
+                    key={day}
+                    onDragOver={(e) => { if (dragDay) { e.preventDefault(); setDragOver(day); } }}
+                    onDragLeave={() => setDragOver((d) => (d === day ? null : d))}
+                    onDrop={(e) => { e.preventDefault(); if (dragDay) moveDay(dragDay, day); setDragDay(null); setDragOver(null); }}
+                    style={{
+                      background: isOver ? "#EEF2E8" : C.cream,
+                      border: `${isOver ? 2 : 1}px ${isOver ? "dashed" : "solid"} ${isOver ? C.sage : C.line}`,
+                      borderRadius: 14, padding: "14px 18px", display: "flex", alignItems: "center", gap: 14,
+                      flexWrap: "wrap", transition: "background .12s",
+                    }}
+                  >
                     <div style={{ width: 92, flexShrink: 0, fontSize: 15, fontWeight: 700 }}>{day}</div>
-                    <div style={{ flex: "1 1 200px" }}>
-                      {r ? (
-                        <div>
-                          <div style={{ fontSize: 17, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
-                          <div style={{ fontFamily: uiFont, fontSize: 12.5, color: C.sub, marginTop: 2 }}>{r.time} min · {(r.tags || []).filter((t) => t !== "dinner").join(", ")}</div>
+
+                    {r ? (
+                      <>
+                        <div
+                          draggable
+                          onDragStart={() => setDragDay(day)}
+                          onDragEnd={() => { setDragDay(null); setDragOver(null); }}
+                          title="Drag to another day"
+                          style={{
+                            flex: "1 1 200px", display: "flex", alignItems: "center", gap: 10,
+                            cursor: "grab", opacity: dragDay === day ? .4 : 1,
+                          }}
+                        >
+                          <GripVertical size={16} color={C.sub} style={{ flexShrink: 0 }} />
+                          <div>
+                            <div style={{ fontSize: 17, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
+                            <div style={{ fontFamily: uiFont, fontSize: 12.5, color: C.sub, marginTop: 2 }}>{r.time} min · {(r.tags || []).filter((t) => t !== "dinner").join(", ")}</div>
+                          </div>
                         </div>
-                      ) : <span style={{ color: C.sub, fontStyle: "italic" }}>No meal planned</span>}
-                    </div>
-                    {r && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
-                        <button onClick={() => setDayServings(day, (entry.servings || r.servings) - 1)} style={stepBtn(C)}><Minus size={13} /></button>
-                        <span style={{ fontSize: 13, minWidth: 54, textAlign: "center", color: C.sub }}>{entry.servings || r.servings} serv</span>
-                        <button onClick={() => setDayServings(day, (entry.servings || r.servings) + 1)} style={stepBtn(C)}><Plus size={13} /></button>
-                      </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
+                          <button onClick={() => setDayServings(day, (entry.servings || r.servings) - 1)} style={stepBtn(C)}><Minus size={13} /></button>
+                          <span style={{ fontSize: 13, minWidth: 54, textAlign: "center", color: C.sub }}>{entry.servings || r.servings} serv</span>
+                          <button onClick={() => setDayServings(day, (entry.servings || r.servings) + 1)} style={stepBtn(C)}><Plus size={13} /></button>
+                          <button onClick={() => clearDay(day)} title="Remove meal" style={{ ...stepBtn(C), marginLeft: 4 }}><X size={14} /></button>
+                        </div>
+                      </>
+                    ) : (
+                      <span style={{ flex: "1 1 200px", color: C.sub, fontStyle: "italic", fontFamily: uiFont }}>
+                        {isOver ? "Drop here" : "No meal planned"}
+                      </span>
                     )}
-                    <select value={entry?.recipeId || ""} onChange={(e) => setDay(day, e.target.value)} style={{ fontFamily: uiFont, fontSize: 13, padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: C.bg, color: C.ink, cursor: "pointer", maxWidth: 180 }}>
-                      <option value="">— choose —</option>
-                      {recipes.map((rec) => <option key={rec.id} value={rec.id}>{rec.name}</option>)}
-                    </select>
                   </div>
                 );
               })}
