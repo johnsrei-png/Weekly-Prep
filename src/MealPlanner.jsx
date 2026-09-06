@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 
 // ---- Seed recipe bank (used offline / as fallback) ------------------------
@@ -99,6 +99,8 @@ export default function MealPlanner() {
   const [dragOver, setDragOver] = useState(null);   // day being hovered over
   const [prefs, setPrefs] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
   const [prefsDraft, setPrefsDraft] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
+  const [archives, setArchives] = useState([]);   // [{id, label, savedAt, plan, grocery}]
+  const [showArchives, setShowArchives] = useState(false);
   const [prefsSaved, setPrefsSaved] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [household, setHouseholdState] = useState(() => (supabase ? getHousehold() : "local"));
@@ -125,6 +127,7 @@ export default function MealPlanner() {
     if (s.defaultServings) setDefaultServings(s.defaultServings);
     setPrefs((p) => ({ ...p, ...(s.prefs || {}) }));
     if (s.prefs) setPrefsDraft((p) => ({ ...p, ...s.prefs }));
+    setArchives(s.archives || []);
   }
 
   useEffect(() => {
@@ -145,14 +148,14 @@ export default function MealPlanner() {
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded) return;
-    const state = { recipes, plan, inventory, checked, defaultServings, prefs };
+    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives };
     if (supabase) {
       if (!household) return;
       supabase.from("meal_planner").upsert({ device_id: household, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, plan, inventory, checked, defaultServings, prefs, loaded, household]);
+  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, loaded, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -386,6 +389,49 @@ export default function MealPlanner() {
   }
   function removeInventory(idx) { setInventory(inventory.filter((_, i) => i !== idx)); }
   function toggleCheck(key) { setChecked({ ...checked, [key]: !checked[key] }); }
+
+  // ---- Week archive ------------------------------------------------------
+  function planIsEmpty() {
+    return !Object.values(plan).some((dp) => dp && Object.keys(dp).length);
+  }
+
+  function archiveWeek() {
+    if (planIsEmpty()) return;
+    // Snapshot the current grocery list, flattened by category.
+    const grocery = [];
+    CAT_ORDER.forEach((cat) => {
+      (groceryList[cat] || []).forEach((n) =>
+        grocery.push({ cat, item: n.item, qty: n.needQty, unit: n.unit })
+      );
+    });
+    const now = new Date();
+    const label = now.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    const entry = {
+      id: `week_${now.getTime()}`,
+      label: `Week of ${label}`,
+      savedAt: now.toISOString(),
+      plan,            // snapshot of the current plan
+      grocery,         // snapshot of the grocery list
+    };
+    setArchives((prev) => [entry, ...prev]);
+    // Start a fresh, empty week.
+    setPlan({});
+    setChecked({});
+    setShowArchives(true);
+  }
+
+  function reloadArchive(id) {
+    const a = archives.find((x) => x.id === id);
+    if (!a) return;
+    setPlan(a.plan || {});
+    setChecked({});
+    setShowArchives(false);
+    setTab("plan");
+  }
+
+  function deleteArchive(id) {
+    setArchives((prev) => prev.filter((x) => x.id !== id));
+  }
 
   function exportList() {
     let txt = "GROCERY LIST\n" + "=".repeat(30) + "\n\n";
@@ -751,6 +797,51 @@ export default function MealPlanner() {
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Week archive controls */}
+            <div style={{ marginTop: 20, fontFamily: uiFont }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <button onClick={archiveWeek} disabled={planIsEmpty()} style={{
+                  display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 10, border: "none",
+                  background: planIsEmpty() ? C.line : C.clay, color: planIsEmpty() ? C.sub : "#fff",
+                  fontSize: 14, fontWeight: 600, cursor: planIsEmpty() ? "default" : "pointer",
+                }}>
+                  <Archive size={16} /> Archive & start new week
+                </button>
+                {archives.length > 0 && (
+                  <button onClick={() => setShowArchives((v) => !v)} style={{
+                    display: "flex", alignItems: "center", gap: 7, padding: "10px 16px", borderRadius: 10,
+                    border: `1px solid ${C.line}`, background: showArchives ? C.chip : C.cream, color: C.ink, fontSize: 14, fontWeight: 600, cursor: "pointer",
+                  }}>
+                    <BookOpen size={15} /> Past weeks ({archives.length})
+                    <ChevronDown size={15} style={{ transform: showArchives ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+                  </button>
+                )}
+              </div>
+
+              {showArchives && archives.length > 0 && (
+                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                  {archives.map((a) => {
+                    const mealCount = Object.values(a.plan || {}).reduce((n, dp) => n + Object.keys(dp || {}).length, 0);
+                    return (
+                      <div key={a.id} style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                        <div style={{ flex: "1 1 180px" }}>
+                          <div style={{ fontSize: 15, fontWeight: 600 }}>{a.label}</div>
+                          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>{mealCount} meals · {(a.grocery || []).length} grocery items</div>
+                        </div>
+                        <button onClick={() => reloadArchive(a.id)} style={{
+                          display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", background: C.sage, color: "#fff",
+                          border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                        }}><RefreshCw size={14} /> Load into this week</button>
+                        <button onClick={() => deleteArchive(a.id)} title="Delete archived week" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex" }}>
+                          <Trash2 size={17} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         )}
