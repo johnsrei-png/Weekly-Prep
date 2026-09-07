@@ -121,8 +121,9 @@ export default function MealPlanner() {
   const [chatBusy, setChatBusy] = useState(false);
   const [addingFor, setAddingFor] = useState(null); // recipe id pending slot-pick
   const [addMeal, setAddMeal] = useState("dinner");  // chosen meal type in the add flow
-  const [dragDay, setDragDay] = useState(null);     // day currently being dragged
-  const [dragOver, setDragOver] = useState(null);   // day being hovered over
+  const [dragDay, setDragDay] = useState(null);     // slot currently being dragged (desktop)
+  const [dragOver, setDragOver] = useState(null);   // slot being hovered over (desktop)
+  const [moving, setMoving] = useState(null);       // slot "picked up" via tap (works on touch + mouse)
   const [prefs, setPrefs] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
   const [prefsDraft, setPrefsDraft] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
   const [archives, setArchives] = useState([]);   // [{id, label, savedAt, plan, grocery}]
@@ -305,6 +306,19 @@ export default function MealPlanner() {
     });
     setChecked({});
   }
+
+  // Tap-to-move: works on touch and mouse. Tap a filled slot's handle to pick it
+  // up, then tap any slot to move it there. Tapping the same slot cancels.
+  function tapSlot(slotKey, hasMeal) {
+    if (moving) {
+      if (moving === slotKey) { setMoving(null); return; }  // tapped same -> cancel
+      moveSlot(moving, slotKey);
+      setMoving(null);
+    } else if (hasMeal) {
+      setMoving(slotKey);   // pick up
+    }
+  }
+
 
   // ---- Snacks (per day, freeform, optional buy toggle) -------------------
   function addSnack(day, text) {
@@ -888,8 +902,14 @@ export default function MealPlanner() {
             </div>
 
             <p style={{ fontFamily: uiFont, fontSize: 13, color: C.sub, margin: "0 0 12px" }}>
-              Ask the assistant above for meals and add them to any day. Drag a meal to another slot to move it.
+              Ask the assistant above for meals and add them to any day. To move a meal, drag it (on a computer) or tap its handle then tap another slot (on any device).
             </p>
+            {moving && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: "#FBF1DC", border: `1px solid ${C.clay}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontFamily: uiFont, fontSize: 14 }}>
+                <span>Moving a meal — tap where you want it.</span>
+                <button onClick={() => setMoving(null)} style={{ background: "none", border: `1px solid ${C.clay}`, color: C.clay, borderRadius: 8, padding: "4px 12px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancel</button>
+              </div>
+            )}
 
             <div style={{ display: "grid", gap: 10 }}>
               {DAYS.map((day) => (
@@ -902,18 +922,23 @@ export default function MealPlanner() {
                       const r = entry && recipes.find((x) => x.id === entry.recipeId);
                       const isOver = dragOver === slotKey && dragDay !== slotKey;
                       const rColor = r ? recipeColors[r.id] : null;
+                      const isPickedUp = moving === slotKey;
+                      const isDropTarget = moving && moving !== slotKey;
+                      const highlight = isOver || isDropTarget;
                       return (
                         <div
                           key={m.id}
                           onDragOver={(e) => { if (dragDay) { e.preventDefault(); setDragOver(slotKey); } }}
                           onDragLeave={() => setDragOver((k) => (k === slotKey ? null : k))}
                           onDrop={(e) => { e.preventDefault(); if (dragDay) moveSlot(dragDay, slotKey); setDragDay(null); setDragOver(null); }}
+                          onClick={() => { if (moving) tapSlot(slotKey, !!r); }}
                           style={{
                             display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-                            background: isOver ? "#EEF2E8" : (rColor ? rColor + "14" : C.bg),
-                            border: `${isOver ? 2 : 1}px ${isOver ? "dashed" : "solid"} ${isOver ? C.sage : C.line}`,
-                            borderLeft: rColor ? `4px solid ${rColor}` : `${isOver ? 2 : 1}px ${isOver ? "dashed" : "solid"} ${isOver ? C.sage : C.line}`,
+                            background: highlight ? "#EEF2E8" : (isPickedUp ? "#FBF1DC" : (rColor ? rColor + "14" : C.bg)),
+                            border: `${highlight || isPickedUp ? 2 : 1}px ${highlight ? "dashed" : "solid"} ${highlight ? C.sage : (isPickedUp ? C.clay : C.line)}`,
+                            borderLeft: rColor && !highlight && !isPickedUp ? `4px solid ${rColor}` : undefined,
                             borderRadius: 10, padding: "10px 12px", transition: "background .12s",
+                            cursor: isDropTarget ? "pointer" : "default",
                           }}
                         >
                           <span style={{ width: 74, flexShrink: 0, fontFamily: uiFont, fontSize: 12, fontWeight: 700, color: C.sageD, textTransform: "uppercase", letterSpacing: .5 }}>{m.label}</span>
@@ -924,12 +949,17 @@ export default function MealPlanner() {
                                 draggable
                                 onDragStart={() => setDragDay(slotKey)}
                                 onDragEnd={() => { setDragDay(null); setDragOver(null); }}
-                                title="Drag to another slot"
-                                style={{ flex: "1 1 180px", display: "flex", alignItems: "center", gap: 10, cursor: "grab", opacity: dragDay === slotKey ? .4 : 1 }}
+                                style={{ flex: "1 1 180px", display: "flex", alignItems: "center", gap: 10, opacity: dragDay === slotKey ? .4 : 1 }}
                               >
-                                <GripVertical size={16} color={C.sub} style={{ flexShrink: 0 }} />
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); tapSlot(slotKey, true); }}
+                                  title={isPickedUp ? "Tap a slot to move it here, or tap again to cancel" : "Tap to pick up, then tap another slot"}
+                                  style={{ background: isPickedUp ? C.clay : "transparent", border: "none", borderRadius: 7, padding: 4, cursor: "pointer", display: "flex", flexShrink: 0, touchAction: "manipulation" }}
+                                >
+                                  <GripVertical size={16} color={isPickedUp ? "#fff" : C.sub} />
+                                </button>
                                 <div>
-                                  <div style={{ fontSize: 16, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3, display: "flex", alignItems: "center", gap: 7 }} onClick={() => setViewRecipe(r)}>
+                                  <div style={{ fontSize: 16, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3, display: "flex", alignItems: "center", gap: 7 }} onClick={(e) => { e.stopPropagation(); setViewRecipe(r); }}>
                                     {rColor && <span style={{ width: 9, height: 9, borderRadius: "50%", background: rColor, flexShrink: 0 }} />}
                                     {r.name}
                                   </div>
@@ -940,12 +970,12 @@ export default function MealPlanner() {
                                 </div>
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
-                                <button onClick={() => clearSlot(day, m.id)} title="Remove meal" style={stepBtn(C)}><X size={14} /></button>
+                                <button onClick={(e) => { e.stopPropagation(); clearSlot(day, m.id); }} title="Remove meal" style={stepBtn(C)}><X size={14} /></button>
                               </div>
                             </>
                           ) : (
-                            <span style={{ flex: "1 1 180px", color: C.sub, fontStyle: "italic", fontFamily: uiFont, fontSize: 13.5 }}>
-                              {isOver ? "Drop here" : "Empty — add from chat"}
+                            <span style={{ flex: "1 1 180px", color: isDropTarget ? C.sageD : C.sub, fontStyle: "italic", fontFamily: uiFont, fontSize: 13.5 }}>
+                              {highlight ? "Tap or drop here" : "Empty — add from chat"}
                             </span>
                           )}
                         </div>
