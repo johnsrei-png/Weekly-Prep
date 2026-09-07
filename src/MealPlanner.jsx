@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
@@ -124,6 +124,7 @@ export default function MealPlanner() {
   const [genError, setGenError] = useState("");
   const [newInv, setNewInv] = useState({ item: "", qty: "", unit: "oz", lowAt: "" });
   const [showSuggest, setShowSuggest] = useState(false);
+  const [mergeFrom, setMergeFrom] = useState(null);   // index of pantry item being merged into another
   const [viewRecipe, setViewRecipe] = useState(null);
   const [chatLog, setChatLog] = useState([]);   // [{role, content, recipes?}]
   const [chatInput, setChatInput] = useState("");
@@ -561,10 +562,25 @@ export default function MealPlanner() {
   // ---- Inventory ops ------------------------------------------------------
   function addInventory() {
     if (!newInv.item.trim()) return;
-    setInventory([...inventory, {
-      item: newInv.item.trim(), qty: newInv.qty || "1",
-      unit: newInv.unit.trim(), lowAt: newInv.lowAt.trim(),
-    }]);
+    const item = newInv.item.trim();
+    const unit = newInv.unit.trim();
+    const addQty = parseFloat(newInv.qty) || (newInv.qty === "" ? 1 : 0);
+    setInventory((prev) => {
+      // merge into an existing row with the same name AND same unit
+      const idx = prev.findIndex((inv) => norm(inv.item) === norm(item) && (inv.unit || "") === unit);
+      if (idx >= 0) {
+        const next = [...prev];
+        const cur = parseFloat(next[idx].qty) || 0;
+        next[idx] = {
+          ...next[idx],
+          qty: String(Math.round((cur + addQty) * 100) / 100),
+          // keep an existing low-at, or set it if this add specifies one
+          lowAt: next[idx].lowAt || newInv.lowAt.trim(),
+        };
+        return next;
+      }
+      return [...prev, { item, qty: newInv.qty || "1", unit, lowAt: newInv.lowAt.trim() }];
+    });
     setNewInv({ item: "", qty: "", unit: "oz", lowAt: "" });
     setShowSuggest(false);
   }
@@ -644,6 +660,34 @@ export default function MealPlanner() {
     setInventory(next);
   }
   function removeInventory(idx) { setInventory(inventory.filter((_, i) => i !== idx)); }
+
+  // Manually merge pantry item at fromIdx INTO the item at intoIdx, then remove the source.
+  // Combines quantities, converting units when both are the same measurement type.
+  function mergeInventory(fromIdx, intoIdx) {
+    if (fromIdx === intoIdx) { setMergeFrom(null); return; }
+    setInventory((prev) => {
+      const from = prev[fromIdx];
+      const into = prev[intoIdx];
+      if (!from || !into) return prev;
+      const fromBase = toBase(parseFloat(from.qty) || 0, from.unit);
+      const intoBase = toBase(parseFloat(into.qty) || 0, into.unit);
+      let newQty;
+      if (fromBase.base === intoBase.base && fromBase.base !== "count") {
+        // same measurement type (both weight or both volume): convert into the target's unit
+        const targetUnitFactor = toBase(1, into.unit).val || 1;
+        newQty = (intoBase.val + fromBase.val) / targetUnitFactor;
+      } else {
+        // different or countable units: just add the raw numbers, keep target's unit
+        newQty = (parseFloat(into.qty) || 0) + (parseFloat(from.qty) || 0);
+      }
+      const merged = { ...into, qty: String(Math.round(newQty * 100) / 100), lowAt: into.lowAt || from.lowAt };
+      // rebuild list: replace target, drop source
+      return prev
+        .map((inv, i) => (i === intoIdx ? merged : inv))
+        .filter((_, i) => i !== fromIdx);
+    });
+    setMergeFrom(null);
+  }
   function toggleCheck(key) { setChecked({ ...checked, [key]: !checked[key] }); }
 
   // ---- Extras: non-pantry grocery add-ons (paper towels, coffee, etc.) ----
@@ -1585,22 +1629,41 @@ export default function MealPlanner() {
             {inventory.length === 0 ? (
               <Empty C={C} icon={Package} title="Your pantry is empty." sub="Add staples like oil, rice, or spices you keep on hand." />
             ) : (
-              <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
-                {inventory.map((inv, i) => {
-                  const low = inv.lowAt && parseFloat(inv.qty) <= parseFloat(inv.lowAt);
-                  return (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: uiFont, background: low ? "#FDF6E7" : "transparent" }}>
-                      <span style={{ flex: 1, fontSize: 15 }}>
-                        <strong style={{ fontWeight: 600 }}>{inv.qty}{inv.unit ? " " + inv.unit : ""}</strong> {inv.item}
-                        {low && <span style={{ color: C.amber, fontSize: 12, marginLeft: 8 }}>· low</span>}
-                      </span>
-                      <button onClick={() => adjustInv(i, -1)} style={stepBtn(C)}><Minus size={13} /></button>
-                      <button onClick={() => adjustInv(i, 1)} style={stepBtn(C)}><Plus size={13} /></button>
-                      <button onClick={() => removeInventory(i)} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", marginLeft: 4 }}><Trash2 size={17} /></button>
-                    </div>
-                  );
-                })}
-              </div>
+              <>
+                {mergeFrom !== null && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: "#FBF1DC", border: `1px solid ${C.clay}`, borderRadius: 10, padding: "10px 14px", marginBottom: 10, fontFamily: uiFont, fontSize: 14 }}>
+                    <span>Merging <strong>{inventory[mergeFrom]?.item}</strong> — tap the item to combine it into.</span>
+                    <button onClick={() => setMergeFrom(null)} style={{ background: "none", border: `1px solid ${C.clay}`, color: C.clay, borderRadius: 8, padding: "4px 12px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancel</button>
+                  </div>
+                )}
+                <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+                  {inventory.map((inv, i) => {
+                    const low = inv.lowAt && parseFloat(inv.qty) <= parseFloat(inv.lowAt);
+                    const isMergeSource = mergeFrom === i;
+                    const isMergeTarget = mergeFrom !== null && mergeFrom !== i;
+                    return (
+                      <div key={i}
+                        onClick={() => { if (isMergeTarget) mergeInventory(mergeFrom, i); }}
+                        style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: uiFont, background: isMergeSource ? "#FBF1DC" : (low ? "#FDF6E7" : "transparent"), cursor: isMergeTarget ? "pointer" : "default", outline: isMergeTarget ? `1px dashed ${C.sage}` : "none", outlineOffset: -3 }}>
+                        <span style={{ flex: 1, fontSize: 15 }}>
+                          <strong style={{ fontWeight: 600 }}>{inv.qty}{inv.unit ? " " + inv.unit : ""}</strong> {inv.item}
+                          {low && <span style={{ color: C.amber, fontSize: 12, marginLeft: 8 }}>· low</span>}
+                          {isMergeTarget && <span style={{ color: C.sageD, fontSize: 12, marginLeft: 8 }}>· tap to merge here</span>}
+                        </span>
+                        {mergeFrom === null && (
+                          <>
+                            <button onClick={() => adjustInv(i, -1)} style={stepBtn(C)}><Minus size={13} /></button>
+                            <button onClick={() => adjustInv(i, 1)} style={stepBtn(C)}><Plus size={13} /></button>
+                            <button onClick={() => setMergeFrom(i)} title="Merge this into another item" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 4 }} disabled={inventory.length < 2}><GitMerge size={16} /></button>
+                            <button onClick={() => removeInventory(i)} title="Remove" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex" }}><Trash2 size={17} /></button>
+                          </>
+                        )}
+                        {isMergeSource && <span style={{ fontSize: 12, color: C.clay, fontWeight: 600 }}>merging…</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
         )}
