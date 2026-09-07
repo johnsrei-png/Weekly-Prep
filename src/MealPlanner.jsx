@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
@@ -142,6 +142,9 @@ export default function MealPlanner() {
   const [receiptParsing, setReceiptParsing] = useState(false);
   const [receiptError, setReceiptError] = useState("");
   const [receiptItems, setReceiptItems] = useState(null);     // [{item, qty, unit, include}] pending review
+  const [costEstimate, setCostEstimate] = useState(null);     // total USD number
+  const [costEstimating, setCostEstimating] = useState(false);
+  const [costError, setCostError] = useState("");
   const [prefsSaved, setPrefsSaved] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [household, setHouseholdState] = useState(() => (supabase ? getHousehold() : "local"));
@@ -730,6 +733,38 @@ export default function MealPlanner() {
     }
   }
 
+  // Clear a stale cost estimate whenever the grocery list changes.
+  useEffect(() => { setCostEstimate(null); }, [aggregated, plan]);
+
+  async function estimateCost() {
+    setCostError("");
+    setCostEstimating(true);
+    try {
+      // flatten the grocery list into item + qty + unit
+      const items = [];
+      CAT_ORDER.forEach((cat) => {
+        (groceryList[cat] || []).forEach((n) => {
+          items.push({ item: n.item, qty: n.isSnack ? 1 : Math.round(n.needQty * 100) / 100, unit: n.unit || "" });
+        });
+      });
+      if (!items.length) { setCostEstimate(0); return; }
+      const resp = await fetch("/.netlify/functions/estimate-cost", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Couldn't estimate cost");
+      const prices = data.prices || {};
+      const total = Object.values(prices).reduce((a, v) => a + (parseFloat(v) || 0), 0);
+      setCostEstimate(Math.round(total * 100) / 100);
+    } catch (e) {
+      setCostError(String(e.message || e));
+    } finally {
+      setCostEstimating(false);
+    }
+  }
+
   function exportList() {
     let txt = "GROCERY LIST\n" + "=".repeat(30) + "\n\n";
     CAT_ORDER.forEach((cat) => {
@@ -1310,12 +1345,24 @@ export default function MealPlanner() {
               <Empty C={C} icon={ShoppingCart} title="Nothing to buy yet." sub="Plan some meals, and anything you don't already have in your pantry shows up here." />
             ) : (
               <>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, fontFamily: uiFont, flexWrap: "wrap", gap: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, fontFamily: uiFont, flexWrap: "wrap", gap: 10 }}>
                   <span style={{ fontSize: 14, color: C.sub }}>{totalNeeded} items · each recipe once, scaled to {defaultServings} servings · pantry deducted</span>
-                  <button onClick={exportList} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: C.sage, color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
-                    <Download size={16} /> Export
-                  </button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={estimateCost} disabled={costEstimating} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: C.cream, color: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, cursor: costEstimating ? "wait" : "pointer", fontSize: 14, fontWeight: 600, opacity: costEstimating ? .7 : 1 }}>
+                      <DollarSign size={16} /> {costEstimating ? "Estimating…" : "Estimate cost"}
+                    </button>
+                    <button onClick={exportList} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: C.sage, color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
+                      <Download size={16} /> Export
+                    </button>
+                  </div>
                 </div>
+                {costError && <div style={{ fontFamily: uiFont, fontSize: 13, color: "#B4442E", marginBottom: 14 }}>Couldn't estimate: {costError}</div>}
+                {costEstimate !== null && (
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, background: "#F6F8F3", border: `1px solid ${C.sage}`, borderRadius: 12, padding: "12px 16px", marginBottom: 18, fontFamily: uiFont, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 22, fontWeight: 700, color: C.sageD }}>≈ ${costEstimate.toFixed(2)}</span>
+                    <span style={{ fontSize: 12.5, color: C.sub }}>rough estimate · average US prices, not your store or current sales</span>
+                  </div>
+                )}
                 {CAT_ORDER.map((cat) => {
                   const arr = groceryList[cat];
                   if (!arr?.length) return null;
