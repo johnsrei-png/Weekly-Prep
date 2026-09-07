@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
@@ -133,8 +133,12 @@ export default function MealPlanner() {
   const [prefs, setPrefs] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
   const [prefsDraft, setPrefsDraft] = useState({ diet: "anything", avoid: "", dislikes: "", notes: "" });
   const [archives, setArchives] = useState([]);   // [{id, label, savedAt, plan, grocery}]
+  const [savedIds, setSavedIds] = useState([]);   // recipe ids the user has saved to their library
   const [showArchives, setShowArchives] = useState(false);
   const [snackInputs, setSnackInputs] = useState({});  // { day: "text being typed" }
+  const [parsing, setParsing] = useState(false);       // image parse in progress
+  const [parseError, setParseError] = useState("");
+  const [addingSavedFor, setAddingSavedFor] = useState(null); // {recipeId, meal} slot-pick in Recipes tab
   const [prefsSaved, setPrefsSaved] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [household, setHouseholdState] = useState(() => (supabase ? getHousehold() : "local"));
@@ -162,6 +166,7 @@ export default function MealPlanner() {
     setPrefs((p) => ({ ...p, ...(s.prefs || {}) }));
     if (s.prefs) setPrefsDraft((p) => ({ ...p, ...s.prefs }));
     setArchives(s.archives || []);
+    setSavedIds(s.savedIds || []);
   }
 
   useEffect(() => {
@@ -182,14 +187,14 @@ export default function MealPlanner() {
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded) return;
-    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives };
+    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds };
     if (supabase) {
       if (!household) return;
       supabase.from("meal_planner").upsert({ device_id: household, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, loaded, household]);
+  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, loaded, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -605,6 +610,59 @@ export default function MealPlanner() {
     setArchives((prev) => prev.filter((x) => x.id !== id));
   }
 
+  // ---- Saved recipe library ----------------------------------------------
+  const savedRecipes = useMemo(
+    () => savedIds.map((id) => recipes.find((r) => r.id === id)).filter(Boolean),
+    [savedIds, recipes]
+  );
+
+  function saveRecipe(recipe) {
+    // ensure the recipe exists in the pool, then mark it saved
+    setRecipes((prev) => (prev.find((r) => r.id === recipe.id) ? prev : [recipe, ...prev]));
+    setSavedIds((prev) => (prev.includes(recipe.id) ? prev : [recipe.id, ...prev]));
+  }
+  function unsaveRecipe(id) {
+    setSavedIds((prev) => prev.filter((x) => x !== id));
+  }
+
+  // Recipes currently used in the week that aren't yet saved (for quick "save from week")
+  const weekRecipesUnsaved = useMemo(() => {
+    const ids = new Set();
+    DAYS.forEach((day) => MEALS.forEach((m) => {
+      const rid = plan[day]?.[m.id]?.recipeId;
+      if (rid && !savedIds.includes(rid)) ids.add(rid);
+    }));
+    return [...ids].map((id) => recipes.find((r) => r.id === id)).filter(Boolean);
+  }, [plan, savedIds, recipes]);
+
+  async function parseImageFile(file) {
+    if (!file) return;
+    setParseError("");
+    setParsing(true);
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.onerror = () => rej(new Error("Could not read file"));
+        reader.readAsDataURL(file);
+      });
+      const base64 = String(dataUrl).split(",")[1];
+      const mediaType = file.type || "image/jpeg";
+      const resp = await fetch("/.netlify/functions/parse-recipe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, mediaType }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Couldn't read that image");
+      if (data.recipe) saveRecipe(data.recipe);   // save straight to library
+    } catch (e) {
+      setParseError(String(e.message || e));
+    } finally {
+      setParsing(false);
+    }
+  }
+
   function exportList() {
     let txt = "GROCERY LIST\n" + "=".repeat(30) + "\n\n";
     CAT_ORDER.forEach((cat) => {
@@ -737,6 +795,7 @@ export default function MealPlanner() {
         <div style={{ display: "flex", gap: isMobile ? 4 : 6, background: C.chip, padding: isMobile ? 4 : 6, borderRadius: 14, margin: isMobile ? "16px 0" : "22px 0", fontFamily: uiFont }}>
           {tabBtn("plan", isMobile ? "Plan" : "Meal Plan", Calendar)}
           {tabBtn("grocery", isMobile ? "Grocery" : "Grocery List", ShoppingCart, totalNeeded)}
+          {tabBtn("recipes", "Recipes", BookOpen, savedIds.length)}
           {tabBtn("inventory", "Pantry", Package, inventory.length)}
         </div>
 
@@ -1072,6 +1131,101 @@ export default function MealPlanner() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ---------------- RECIPES ---------------- */}
+        {tab === "recipes" && (
+          <div>
+            {/* Add from image */}
+            <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 14, padding: isMobile ? 14 : 18, marginBottom: 18, fontFamily: uiFont }}>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+                <Camera size={17} color={C.sageD} /> Add a recipe from a photo
+              </div>
+              <p style={{ fontSize: 13, color: C.sub, margin: "0 0 12px" }}>
+                Snap or upload a photo of a recipe card, cookbook page, or screenshot — it'll be read and saved to your library.
+              </p>
+              <label style={{
+                display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 10,
+                background: parsing ? C.line : C.clay, color: parsing ? C.sub : "#fff", fontSize: 14, fontWeight: 600,
+                cursor: parsing ? "default" : "pointer",
+              }}>
+                <Camera size={16} /> {parsing ? "Reading recipe…" : "Choose or take a photo"}
+                <input type="file" accept="image/*" disabled={parsing}
+                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; parseImageFile(f); }}
+                  style={{ display: "none" }} />
+              </label>
+              {parseError && <div style={{ color: "#B4442E", fontSize: 13, marginTop: 10 }}>Couldn't read that image: {parseError}</div>}
+            </div>
+
+            {/* Save from this week */}
+            {weekRecipesUnsaved.length > 0 && (
+              <div style={{ marginBottom: 18, fontFamily: uiFont }}>
+                <h3 style={{ fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.sageD, marginBottom: 8 }}>In this week — not yet saved</h3>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {weekRecipesUnsaved.map((r) => (
+                    <button key={r.id} onClick={() => saveRecipe(r)} style={{
+                      display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 20,
+                      border: `1px solid ${C.line}`, background: C.cream, color: C.ink, fontSize: 13, cursor: "pointer",
+                    }}>
+                      <Plus size={13} color={C.sage} /> {r.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Saved library */}
+            <h3 style={{ fontFamily: uiFont, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.sageD, marginBottom: 8 }}>
+              Saved recipes ({savedRecipes.length})
+            </h3>
+            {savedRecipes.length === 0 ? (
+              <Empty C={C} icon={BookOpen} title="No saved recipes yet." sub="Add a photo above, or save recipes from your week." />
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {savedRecipes.map((r) => (
+                  <div key={r.id} style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, padding: isMobile ? "12px 14px" : "14px 16px", fontFamily: uiFont }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                      <div style={{ flex: "1 1 160px" }}>
+                        <div style={{ fontSize: 16, fontWeight: 600, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
+                        <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>{r.time} min · makes {r.servings} · {(r.tags || []).slice(0, 3).join(", ")}</div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button onClick={() => setAddingSavedFor(addingSavedFor?.recipeId === r.id ? null : { recipeId: r.id, meal: (r.tags || []).includes("breakfast") ? "breakfast" : (r.tags || []).includes("lunch") ? "lunch" : "dinner" })} style={{
+                          display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff",
+                          border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                        }}><CalendarPlus size={14} /> Add to plan</button>
+                        <button onClick={() => unsaveRecipe(r.id)} title="Remove from library" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 4 }}>
+                          <Trash2 size={17} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {addingSavedFor?.recipeId === r.id && (
+                      <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+                        <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Which meal?</div>
+                        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                          {MEALS.map((mm) => (
+                            <button key={mm.id} onClick={() => setAddingSavedFor({ recipeId: r.id, meal: mm.id })} style={{
+                              padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 500,
+                              border: `1px solid ${addingSavedFor.meal === mm.id ? C.sage : C.line}`,
+                              background: addingSavedFor.meal === mm.id ? C.sage : C.cream, color: addingSavedFor.meal === mm.id ? "#fff" : C.ink,
+                            }}>{mm.label}</button>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Add to which day?</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {DAYS.map((d) => (
+                            <button key={d} onClick={() => { addRecipeToSlot(r, d, addingSavedFor.meal); setAddingSavedFor(null); setTab("plan"); }} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: C.cream, fontSize: 12, cursor: "pointer" }}>{d.slice(0, 3)}</button>
+                          ))}
+                          <button onClick={() => setAddingSavedFor(null)} style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: "transparent", color: C.sub, fontSize: 12, cursor: "pointer" }}>cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
