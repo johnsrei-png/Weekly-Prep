@@ -143,6 +143,7 @@ export default function MealPlanner() {
   const [receiptError, setReceiptError] = useState("");
   const [receiptItems, setReceiptItems] = useState(null);     // [{item, qty, unit, include}] pending review
   const [costEstimate, setCostEstimate] = useState(null);     // total USD number
+  const [costSig, setCostSig] = useState(null);               // signature of the list the estimate was for
   const [costEstimating, setCostEstimating] = useState(false);
   const [costError, setCostError] = useState("");
   const [prefsSaved, setPrefsSaved] = useState(false);
@@ -734,20 +735,24 @@ export default function MealPlanner() {
   }
 
   // Clear a stale cost estimate whenever the grocery list changes.
-  useEffect(() => { setCostEstimate(null); }, [aggregated, plan]);
+  useEffect(() => { setCostEstimate(null); setCostSig(null); }, [aggregated, plan]);
 
   async function estimateCost() {
     setCostError("");
+    // flatten the grocery list into item + qty + unit
+    const items = [];
+    CAT_ORDER.forEach((cat) => {
+      (groceryList[cat] || []).forEach((n) => {
+        items.push({ item: n.item, qty: n.isSnack ? 1 : Math.round(n.needQty * 100) / 100, unit: n.unit || "" });
+      });
+    });
+    if (!items.length) { setCostEstimate(0); return; }
+    // If we already estimated this exact list, reuse it (stable + free).
+    const sig = JSON.stringify(items);
+    if (costEstimate !== null && costSig === sig) return;
+
     setCostEstimating(true);
     try {
-      // flatten the grocery list into item + qty + unit
-      const items = [];
-      CAT_ORDER.forEach((cat) => {
-        (groceryList[cat] || []).forEach((n) => {
-          items.push({ item: n.item, qty: n.isSnack ? 1 : Math.round(n.needQty * 100) / 100, unit: n.unit || "" });
-        });
-      });
-      if (!items.length) { setCostEstimate(0); return; }
       const resp = await fetch("/.netlify/functions/estimate-cost", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -758,6 +763,7 @@ export default function MealPlanner() {
       const prices = data.prices || {};
       const total = Object.values(prices).reduce((a, v) => a + (parseFloat(v) || 0), 0);
       setCostEstimate(Math.round(total * 100) / 100);
+      setCostSig(sig);
     } catch (e) {
       setCostError(String(e.message || e));
     } finally {
