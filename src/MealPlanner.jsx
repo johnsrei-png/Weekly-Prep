@@ -114,6 +114,7 @@ export default function MealPlanner() {
   const [plan, setPlan] = useState({});           // { Monday: {recipeId, servings} }
   const [inventory, setInventory] = useState([]); // [{item, qty, unit, lowAt}]
   const [checked, setChecked] = useState({});
+  const [tripHidden, setTripHidden] = useState([]);  // item keys taken off for this shopping trip only
   const [diet, setDiet] = useState("anything");
   const [defaultServings, setDefaultServings] = useState(4);
   const [loaded, setLoaded] = useState(false);
@@ -540,8 +541,16 @@ export default function MealPlanner() {
     const snackList = Object.values(snackItems).map((item) => ({ item, needQty: 1, unit: "", cat: "snacks", isSnack: true }));
     if (snackList.length) byCat.snacks = snackList;
 
+    // Remove any items the user "took off" for this trip.
+    if (tripHidden.length) {
+      Object.keys(byCat).forEach((cat) => {
+        byCat[cat] = byCat[cat].filter((n) => !tripHidden.includes(norm(n.item) + "|" + (n.unit || "")));
+        if (!byCat[cat].length) delete byCat[cat];
+      });
+    }
+
     return byCat;
-  }, [aggregated, inventory, plan]);
+  }, [aggregated, inventory, plan, tripHidden]);
 
   const totalNeeded = Object.values(groceryList).reduce((a, arr) => a + arr.length, 0);
   const lowStock = inventory.filter((inv) => inv.lowAt && parseFloat(inv.qty) <= parseFloat(inv.lowAt));
@@ -633,6 +642,21 @@ export default function MealPlanner() {
   }
   function removeInventory(idx) { setInventory(inventory.filter((_, i) => i !== idx)); }
   function toggleCheck(key) { setChecked({ ...checked, [key]: !checked[key] }); }
+
+  // "Take off": you actually have this item; the pantry name just didn't match.
+  // Add it to the pantry with enough quantity to cover the need (so it matches
+  // and clears going forward), and hide it from THIS trip's list.
+  function takeOffItem(n) {
+    const already = inventory.find((inv) => norm(inv.item) === norm(n.item) && (inv.unit || "") === (n.unit || ""));
+    if (!already) {
+      // stock it at the needed amount (rounded up a touch) so deduction fully clears it
+      const qty = n.isSnack ? 1 : Math.max(1, Math.ceil((n.needQty || 1) * 10) / 10);
+      setInventory((prev) => [...prev, { item: n.item, qty: String(qty), unit: n.unit || "", lowAt: "" }]);
+    }
+    // hide for this trip only (resets when the plan changes / next week)
+    const key = norm(n.item) + "|" + (n.unit || "");
+    setTripHidden((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  }
 
   // ---- Week archive ------------------------------------------------------
   function planIsEmpty() {
@@ -736,6 +760,8 @@ export default function MealPlanner() {
 
   // Clear a stale cost estimate whenever the grocery list changes.
   useEffect(() => { setCostEstimate(null); setCostSig(null); }, [aggregated, plan]);
+  // Reset "taken off for this trip" items when the plan changes (new trip).
+  useEffect(() => { setTripHidden([]); }, [plan]);
 
   async function estimateCost() {
     setCostError("");
@@ -1382,9 +1408,12 @@ export default function MealPlanner() {
                           return (
                             <div key={key} onClick={() => toggleCheck(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none", cursor: "pointer" }}>
                               <div style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${done ? C.sage : C.line}`, background: done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>{done && <Check size={14} color="#fff" />}</div>
-                              <span style={{ fontFamily: uiFont, fontSize: 15, textDecoration: done ? "line-through" : "none", color: done ? C.sub : C.ink }}>
+                              <span style={{ flex: 1, fontFamily: uiFont, fontSize: 15, textDecoration: done ? "line-through" : "none", color: done ? C.sub : C.ink }}>
                                 {n.isSnack ? n.item : <><strong style={{ fontWeight: 600 }}>{fmtGrocery(n.needQty, n.unit)}</strong> {n.item}</>}
                               </span>
+                              <button onClick={(e) => { e.stopPropagation(); takeOffItem(n); }} title="I already have this — take it off and add to pantry" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", background: "transparent", border: `1px solid ${C.line}`, borderRadius: 14, color: C.sub, fontSize: 12, fontFamily: uiFont, cursor: "pointer", fontWeight: 600 }}>
+                                <Check size={12} /> have it
+                              </button>
                             </div>
                           );
                         })}
