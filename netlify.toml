@@ -17,6 +17,9 @@
 [functions."parse-recipe"]
   timeout = 26
 
+[functions."parse-receipt"]
+  timeout = 26
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
