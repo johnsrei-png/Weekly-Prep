@@ -104,6 +104,12 @@ function fmtGrocery(qty, unit) {
 
 export default function MealPlanner() {
   const [tab, setTab] = useState("plan");
+  const [isMobile, setIsMobile] = useState(typeof window !== "undefined" && window.innerWidth < 640);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [recipes, setRecipes] = useState(SEED_RECIPES);
   const [plan, setPlan] = useState({});           // { Monday: {recipeId, servings} }
   const [inventory, setInventory] = useState([]); // [{item, qty, unit, lowAt}]
@@ -622,12 +628,13 @@ export default function MealPlanner() {
 
   const tabBtn = (id, label, Icon, badge) => (
     <button onClick={() => setTab(id)} style={{
-      display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", border: "none",
-      cursor: "pointer", borderRadius: 10, fontSize: 15, fontWeight: 600, transition: "all .15s",
-      background: tab === id ? C.sage : "transparent", color: tab === id ? "#fff" : C.sub,
+      display: "flex", alignItems: "center", justifyContent: "center", gap: isMobile ? 5 : 8,
+      padding: isMobile ? "10px 8px" : "10px 18px", border: "none", flex: isMobile ? "1 1 0" : "0 0 auto",
+      cursor: "pointer", borderRadius: 10, fontSize: isMobile ? 13 : 15, fontWeight: 600, transition: "all .15s",
+      background: tab === id ? C.sage : "transparent", color: tab === id ? "#fff" : C.sub, whiteSpace: "nowrap", minWidth: 0,
     }}>
-      <Icon size={18} /> {label}
-      {badge > 0 && <span style={{ background: tab === id ? "rgba(255,255,255,.25)" : C.clay, color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 12 }}>{badge}</span>}
+      <Icon size={isMobile ? 16 : 18} style={{ flexShrink: 0 }} /> <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+      {badge > 0 && <span style={{ background: tab === id ? "rgba(255,255,255,.25)" : C.clay, color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 11, flexShrink: 0 }}>{badge}</span>}
     </button>
   );
 
@@ -677,13 +684,13 @@ export default function MealPlanner() {
 
   return (
     <div style={{ fontFamily: "Georgia, serif", background: C.bg, minHeight: "100vh", color: C.ink }}>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "28px 20px 60px" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: isMobile ? "18px 14px 48px" : "28px 20px 60px" }}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6, flexWrap: "wrap" }}>
-          <div style={{ background: C.sage, borderRadius: 12, padding: 10, display: "flex" }}><Utensils size={26} color="#fff" /></div>
+          <div style={{ background: C.sage, borderRadius: 12, padding: isMobile ? 8 : 10, display: "flex" }}><Utensils size={isMobile ? 22 : 26} color="#fff" /></div>
           <div>
-            <h1 style={{ margin: 0, fontSize: 30, letterSpacing: "-0.5px" }}>WeeklyForkast</h1>
-            <p style={{ margin: 0, color: C.sub, fontFamily: uiFont, fontSize: 14 }}>Plan the week, shop the gaps.</p>
+            <h1 style={{ margin: 0, fontSize: isMobile ? 24 : 30, letterSpacing: "-0.5px" }}>WeeklyForkast</h1>
+            <p style={{ margin: 0, color: C.sub, fontFamily: uiFont, fontSize: isMobile ? 13 : 14 }}>Plan the week, shop the gaps.</p>
           </div>
           {supabase && (
             <div style={{ marginLeft: "auto", position: "relative", fontFamily: uiFont }}>
@@ -695,7 +702,7 @@ export default function MealPlanner() {
                 <ChevronDown size={14} style={{ transform: showHousehold ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
               </button>
               {showHousehold && (
-                <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14, width: 260, zIndex: 30, boxShadow: "0 8px 24px rgba(43,38,32,.12)" }}>
+                <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14, width: "min(260px, 80vw)", zIndex: 30, boxShadow: "0 8px 24px rgba(43,38,32,.12)" }}>
                   <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Shared kitchen code. Anyone using it shares this data.</div>
                   <input
                     value={codeInput}
@@ -727,9 +734,9 @@ export default function MealPlanner() {
         )}
 
         {/* Tabs */}
-        <div style={{ display: "flex", gap: 6, background: C.chip, padding: 6, borderRadius: 14, margin: "22px 0", fontFamily: uiFont, flexWrap: "wrap" }}>
-          {tabBtn("plan", "Meal Plan", Calendar)}
-          {tabBtn("grocery", "Grocery List", ShoppingCart, totalNeeded)}
+        <div style={{ display: "flex", gap: isMobile ? 4 : 6, background: C.chip, padding: isMobile ? 4 : 6, borderRadius: 14, margin: isMobile ? "16px 0" : "22px 0", fontFamily: uiFont }}>
+          {tabBtn("plan", isMobile ? "Plan" : "Meal Plan", Calendar)}
+          {tabBtn("grocery", isMobile ? "Grocery" : "Grocery List", ShoppingCart, totalNeeded)}
           {tabBtn("inventory", "Pantry", Package, inventory.length)}
         </div>
 
@@ -816,10 +823,10 @@ export default function MealPlanner() {
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", borderBottom: `1px solid ${C.line}`, background: C.chip }}>
                 <MessageCircle size={17} color={C.sageD} />
                 <span style={{ fontWeight: 700, fontSize: 14 }}>Ask WeeklyForkast</span>
-                <span style={{ fontSize: 12, color: C.sub, marginLeft: "auto" }}>knows your pantry & plan</span>
+                {!isMobile && <span style={{ fontSize: 12, color: C.sub, marginLeft: "auto" }}>knows your pantry & plan</span>}
               </div>
 
-              <div style={{ maxHeight: 340, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ maxHeight: 340, overflowY: "auto", padding: isMobile ? 12 : 16, display: "flex", flexDirection: "column", gap: 12 }}>
                 {chatLog.length === 0 && (
                   <div style={{ color: C.sub, fontSize: 14, lineHeight: 1.6 }}>
                     Ask for a recipe and I'll suggest one you can drop straight into your week. Try:
@@ -913,7 +920,7 @@ export default function MealPlanner() {
 
             <div style={{ display: "grid", gap: 10 }}>
               {DAYS.map((day) => (
-                <div key={day} style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 18px" }}>
+                <div key={day} style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 14, padding: isMobile ? "12px 12px" : "14px 18px" }}>
                   <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10 }}>{day}</div>
                   <div style={{ display: "grid", gap: 8 }}>
                     {MEALS.map((m) => {
@@ -1000,7 +1007,7 @@ export default function MealPlanner() {
                         fontSize: 13, fontWeight: 600, cursor: (snackInputs[day] || "").trim() ? "pointer" : "default", fontFamily: uiFont,
                       }}><Plus size={14} /> Add</button>
                     </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingLeft: 82 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingLeft: isMobile ? 0 : 82 }}>
                       {(plan[day]?.snacks || []).map((sn, i) => (
                         <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 20, padding: "5px 8px 5px 12px", fontFamily: uiFont }}>
                           <span style={{ fontSize: 13 }}>{sn.text}</span>
@@ -1116,7 +1123,7 @@ export default function MealPlanner() {
               Track what's in your kitchen with amounts. Set a "low at" threshold and you'll get a heads-up when you're running out.
             </p>
             <div style={{ display: "flex", gap: 8, marginBottom: 20, fontFamily: uiFont, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ position: "relative", flex: "2 1 150px" }}>
+              <div style={{ position: "relative", flex: isMobile ? "1 1 100%" : "2 1 150px" }}>
                 <input
                   placeholder="Item (e.g. olive oil)"
                   value={newInv.item}
@@ -1139,12 +1146,12 @@ export default function MealPlanner() {
                   </div>
                 )}
               </div>
-              <input placeholder="Qty" value={newInv.qty} onChange={(e) => setNewInv({ ...newInv, qty: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addInventory()} style={inp(C, "0 1 60px")} />
-              <select value={newInv.unit} onChange={(e) => setNewInv({ ...newInv, unit: e.target.value })} style={inp(C, "0 1 90px")}>
+              <input placeholder="Qty" value={newInv.qty} onChange={(e) => setNewInv({ ...newInv, qty: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addInventory()} style={inp(C, isMobile ? "1 1 60px" : "0 1 60px")} />
+              <select value={newInv.unit} onChange={(e) => setNewInv({ ...newInv, unit: e.target.value })} style={inp(C, isMobile ? "1 1 80px" : "0 1 90px")}>
                 {["oz", "lb", "g", "kg", "cup", "tbsp", "tsp", "can", "clove", "bunch", "head", "pint", "bag", "scoop", "each"].map((u) => <option key={u} value={u === "each" ? "" : u}>{u}</option>)}
               </select>
-              <input placeholder="Low at" value={newInv.lowAt} onChange={(e) => setNewInv({ ...newInv, lowAt: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addInventory()} style={inp(C, "0 1 70px")} title="Warn when quantity drops to this" />
-              <button onClick={addInventory} style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 16px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, cursor: "pointer", fontSize: 14, fontWeight: 600 }}><Plus size={16} /> Add</button>
+              <input placeholder="Low at" value={newInv.lowAt} onChange={(e) => setNewInv({ ...newInv, lowAt: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addInventory()} style={inp(C, isMobile ? "1 1 70px" : "0 1 70px")} title="Warn when quantity drops to this" />
+              <button onClick={addInventory} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "10px 16px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, cursor: "pointer", fontSize: 14, fontWeight: 600, flex: isMobile ? "1 1 100%" : "0 0 auto" }}><Plus size={16} /> Add</button>
             </div>
 
             {inventory.length === 0 ? (
@@ -1178,7 +1185,7 @@ export default function MealPlanner() {
         const scaled = scale !== 1;
         return (
         <div onClick={() => setViewRecipe(null)} style={{ position: "fixed", inset: 0, background: "rgba(43,38,32,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, borderRadius: 16, maxWidth: 480, width: "100%", maxHeight: "85vh", overflow: "auto", padding: 26 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, borderRadius: 16, maxWidth: 480, width: "100%", maxHeight: "85vh", overflow: "auto", padding: isMobile ? 18 : 26 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <h2 style={{ margin: 0, fontSize: 24 }}>{viewRecipe.name}</h2>
               <button onClick={() => setViewRecipe(null)} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub }}><X size={22} /></button>
