@@ -139,6 +139,9 @@ export default function MealPlanner() {
   const [parsing, setParsing] = useState(false);       // image parse in progress
   const [parseError, setParseError] = useState("");
   const [addingSavedFor, setAddingSavedFor] = useState(null); // {recipeId, meal} slot-pick in Recipes tab
+  const [receiptParsing, setReceiptParsing] = useState(false);
+  const [receiptError, setReceiptError] = useState("");
+  const [receiptItems, setReceiptItems] = useState(null);     // [{item, qty, unit, include}] pending review
   const [prefsSaved, setPrefsSaved] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [household, setHouseholdState] = useState(() => (supabase ? getHousehold() : "local"));
@@ -554,6 +557,70 @@ export default function MealPlanner() {
     setNewInv((prev) => ({ ...prev, item: it.name, unit: it.unit || prev.unit }));
     setShowSuggest(false);
   }
+
+  // ---- Receipt scanning --------------------------------------------------
+  async function parseReceiptFile(file) {
+    if (!file) return;
+    setReceiptError("");
+    setReceiptItems(null);
+    setReceiptParsing(true);
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.onerror = () => rej(new Error("Could not read file"));
+        reader.readAsDataURL(file);
+      });
+      const base64 = String(dataUrl).split(",")[1];
+      const mediaType = file.type || "image/jpeg";
+      const resp = await fetch("/.netlify/functions/parse-receipt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, mediaType }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Couldn't read that receipt");
+      const items = (data.items || []).map((it) => ({ ...it, include: true }));
+      if (!items.length) throw new Error("No food items found on that receipt");
+      setReceiptItems(items);
+    } catch (e) {
+      setReceiptError(String(e.message || e));
+    } finally {
+      setReceiptParsing(false);
+    }
+  }
+
+  function toggleReceiptItem(idx) {
+    setReceiptItems((prev) => prev.map((it, i) => (i === idx ? { ...it, include: !it.include } : it)));
+  }
+  function editReceiptItem(idx, field, value) {
+    setReceiptItems((prev) => prev.map((it, i) => (i === idx ? { ...it, [field]: value } : it)));
+  }
+  function cancelReceipt() {
+    setReceiptItems(null);
+    setReceiptError("");
+  }
+  function confirmReceipt() {
+    const chosen = (receiptItems || []).filter((it) => it.include && it.item.trim());
+    if (!chosen.length) { setReceiptItems(null); return; }
+    setInventory((prev) => {
+      const next = [...prev];
+      chosen.forEach((it) => {
+        // merge into an existing pantry row with the same name AND same unit
+        const idx = next.findIndex((inv) => norm(inv.item) === norm(it.item) && (inv.unit || "") === (it.unit || ""));
+        if (idx >= 0) {
+          const cur = parseFloat(next[idx].qty) || 0;
+          const add = parseFloat(it.qty) || 0;
+          next[idx] = { ...next[idx], qty: String(Math.round((cur + add) * 100) / 100) };
+        } else {
+          next.push({ item: it.item.trim(), qty: String(it.qty || 1), unit: it.unit || "", lowAt: "" });
+        }
+      });
+      return next;
+    });
+    setReceiptItems(null);
+  }
+
   function adjustInv(idx, delta) {
     const next = [...inventory];
     const cur = parseFloat(next[idx].qty) || 0;
@@ -1283,6 +1350,57 @@ export default function MealPlanner() {
             <p style={{ fontFamily: uiFont, fontSize: 14, color: C.sub, marginTop: 0 }}>
               Track what's in your kitchen with amounts. Set a "low at" threshold and you'll get a heads-up when you're running out.
             </p>
+
+            {/* Scan a receipt */}
+            <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 14, padding: isMobile ? 14 : 18, marginBottom: 18, fontFamily: uiFont }}>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+                <Camera size={17} color={C.sageD} /> Scan a grocery receipt
+              </div>
+              <p style={{ fontSize: 13, color: C.sub, margin: "0 0 12px" }}>
+                Snap a photo of your receipt — the items will be read so you can review and add them to your pantry.
+              </p>
+              <label style={{
+                display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 10,
+                background: receiptParsing ? C.line : C.clay, color: receiptParsing ? C.sub : "#fff", fontSize: 14, fontWeight: 600,
+                cursor: receiptParsing ? "default" : "pointer",
+              }}>
+                <Camera size={16} /> {receiptParsing ? "Reading receipt…" : "Choose or take a photo"}
+                <input type="file" accept="image/*" disabled={receiptParsing}
+                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; parseReceiptFile(f); }}
+                  style={{ display: "none" }} />
+              </label>
+              {receiptError && <div style={{ color: "#B4442E", fontSize: 13, marginTop: 10 }}>Couldn't read that receipt: {receiptError}</div>}
+
+              {/* Review parsed items */}
+              {receiptItems && (
+                <div style={{ marginTop: 16, borderTop: `1px solid ${C.line}`, paddingTop: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                    <span style={{ fontSize: 13, color: C.sub }}>{receiptItems.filter((i) => i.include).length} of {receiptItems.length} selected · uncheck any you don't want, edit as needed</span>
+                  </div>
+                  <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+                    {receiptItems.map((it, idx) => (
+                      <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, background: it.include ? C.bg : "transparent", border: `1px solid ${C.line}`, borderRadius: 9, padding: "7px 10px", opacity: it.include ? 1 : .55 }}>
+                        <button onClick={() => toggleReceiptItem(idx)} style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${it.include ? C.sage : C.line}`, background: it.include ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                          {it.include && <Check size={14} color="#fff" />}
+                        </button>
+                        <input value={it.item} onChange={(e) => editReceiptItem(idx, "item", e.target.value)} style={{ flex: "2 1 100px", padding: "6px 9px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream }} />
+                        <input value={it.qty} onChange={(e) => editReceiptItem(idx, "qty", e.target.value)} style={{ flex: "0 1 50px", padding: "6px 9px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream }} />
+                        <select value={it.unit} onChange={(e) => editReceiptItem(idx, "unit", e.target.value)} style={{ flex: "0 1 74px", padding: "6px 6px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream }}>
+                          {["", "oz", "lb", "g", "kg", "cup", "can", "bunch", "head", "pint", "bag"].map((u) => <option key={u || "each"} value={u}>{u || "each"}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={confirmReceipt} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+                      <Plus size={15} /> Add selected to pantry
+                    </button>
+                    <button onClick={cancelReceipt} style={{ padding: "9px 16px", background: "transparent", color: C.sub, border: `1px solid ${C.line}`, borderRadius: 9, fontSize: 14, cursor: "pointer" }}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div style={{ display: "flex", gap: 8, marginBottom: 20, fontFamily: uiFont, flexWrap: "wrap", alignItems: "center" }}>
               <div style={{ position: "relative", flex: isMobile ? "1 1 100%" : "2 1 150px" }}>
                 <input
