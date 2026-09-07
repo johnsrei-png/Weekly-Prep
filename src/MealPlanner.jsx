@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
+import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
 // ---- Seed recipe bank (used offline / as fallback) ------------------------
 const SEED_RECIPES = [
@@ -84,6 +85,23 @@ function fmtQty(q) {
   return Number.isInteger(n) ? n : n.toFixed(2).replace(/\.?0+$/, "");
 }
 
+// Display a grocery quantity. Weight units (g/kg/oz/lb) are converted to oz,
+// then shown as lb once they're 16 oz or more (easier to read). Everything else
+// — counts, cups, tbsp, bunches, cans — is left in its original unit.
+function fmtGrocery(qty, unit) {
+  const u = (unit || "").toLowerCase();
+  if (WEIGHT[u]) {
+    const oz = qty * WEIGHT[u];               // WEIGHT is oz-based
+    if (oz >= 16) {
+      const lb = oz / 16;
+      return `${fmtQty(lb)} lb`;
+    }
+    return `${fmtQty(oz)} oz`;
+  }
+  // non-weight: keep as-is
+  return `${fmtQty(qty)}${unit ? " " + unit : ""}`;
+}
+
 export default function MealPlanner() {
   const [tab, setTab] = useState("plan");
   const [recipes, setRecipes] = useState(SEED_RECIPES);
@@ -96,6 +114,7 @@ export default function MealPlanner() {
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState("");
   const [newInv, setNewInv] = useState({ item: "", qty: "", unit: "oz", lowAt: "" });
+  const [showSuggest, setShowSuggest] = useState(false);
   const [viewRecipe, setViewRecipe] = useState(null);
   const [chatLog, setChatLog] = useState([]);   // [{role, content, recipes?}]
   const [chatInput, setChatInput] = useState("");
@@ -415,6 +434,39 @@ export default function MealPlanner() {
     return map;
   }, [plan, recipeUsage]);
 
+  // Merged autocomplete index: built-in staples + items from recipes + past pantry entries.
+  const itemIndex = useMemo(() => {
+    const map = {};   // name -> {unit, cat}
+    // 1) staples (lowest priority, filled first so others can override the unit)
+    STAPLES.forEach(([name, unit, cat]) => { map[name.toLowerCase()] = { name, unit, cat }; });
+    // 2) recipe ingredients (so pantry names match recipe names exactly)
+    recipes.forEach((r) => (r.ingredients || []).forEach((ing) => {
+      const key = norm(ing.item);
+      if (key && !map[key]) map[key] = { name: ing.item, unit: ing.unit || "", cat: ing.cat || "pantry" };
+    }));
+    // 3) items already in the pantry (remembered)
+    inventory.forEach((inv) => {
+      const key = norm(inv.item);
+      if (key && !map[key]) map[key] = { name: inv.item, unit: inv.unit || "", cat: "pantry" };
+    });
+    return Object.values(map).sort((a, b) => a.name.localeCompare(b.name));
+  }, [recipes, inventory]);
+
+  // Suggestions for the current pantry-input text.
+  const itemSuggestions = useMemo(() => {
+    const q = norm(newInv.item);
+    if (!q) return [];
+    const starts = [], contains = [];
+    for (const it of itemIndex) {
+      const n = it.name.toLowerCase();
+      if (n === q) continue;
+      if (n.startsWith(q)) starts.push(it);
+      else if (n.includes(q)) contains.push(it);
+      if (starts.length >= 8) break;
+    }
+    return [...starts, ...contains].slice(0, 8);
+  }, [newInv.item, itemIndex]);
+
   // ---- Grocery list = needed minus pantry (with unit conversion) ----------
   const groceryList = useMemo(() => {
     const invMap = {};
@@ -470,6 +522,12 @@ export default function MealPlanner() {
       unit: newInv.unit.trim(), lowAt: newInv.lowAt.trim(),
     }]);
     setNewInv({ item: "", qty: "", unit: "oz", lowAt: "" });
+    setShowSuggest(false);
+  }
+  function pickSuggestion(it) {
+    // Fill the item name and a sensible default unit; keep qty/lowAt as-is.
+    setNewInv((prev) => ({ ...prev, item: it.name, unit: it.unit || prev.unit }));
+    setShowSuggest(false);
   }
   function adjustInv(idx, delta) {
     const next = [...inventory];
@@ -533,7 +591,7 @@ export default function MealPlanner() {
       const arr = groceryList[cat];
       if (!arr?.length) return;
       txt += CAT_LABEL[cat].toUpperCase() + "\n";
-      arr.forEach((n) => { txt += n.isSnack ? `  [ ] ${n.item}\n` : `  [ ] ${fmtQty(n.needQty)}${n.unit ? " " + n.unit : ""} ${n.item}\n`; });
+      arr.forEach((n) => { txt += n.isSnack ? `  [ ] ${n.item}\n` : `  [ ] ${fmtGrocery(n.needQty, n.unit)} ${n.item}\n`; });
       txt += "\n";
     });
     const blob = new Blob([txt], { type: "text/plain" });
@@ -1007,7 +1065,7 @@ export default function MealPlanner() {
                             <div key={key} onClick={() => toggleCheck(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none", cursor: "pointer" }}>
                               <div style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${done ? C.sage : C.line}`, background: done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>{done && <Check size={14} color="#fff" />}</div>
                               <span style={{ fontFamily: uiFont, fontSize: 15, textDecoration: done ? "line-through" : "none", color: done ? C.sub : C.ink }}>
-                                {n.isSnack ? n.item : <><strong style={{ fontWeight: 600 }}>{fmtQty(n.needQty)}{n.unit ? " " + n.unit : ""}</strong> {n.item}</>}
+                                {n.isSnack ? n.item : <><strong style={{ fontWeight: 600 }}>{fmtGrocery(n.needQty, n.unit)}</strong> {n.item}</>}
                               </span>
                             </div>
                           );
@@ -1028,10 +1086,32 @@ export default function MealPlanner() {
               Track what's in your kitchen with amounts. Set a "low at" threshold and you'll get a heads-up when you're running out.
             </p>
             <div style={{ display: "flex", gap: 8, marginBottom: 20, fontFamily: uiFont, flexWrap: "wrap", alignItems: "center" }}>
-              <input placeholder="Item (e.g. olive oil)" value={newInv.item} onChange={(e) => setNewInv({ ...newInv, item: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addInventory()} style={inp(C, "2 1 150px")} />
+              <div style={{ position: "relative", flex: "2 1 150px" }}>
+                <input
+                  placeholder="Item (e.g. olive oil)"
+                  value={newInv.item}
+                  onChange={(e) => { setNewInv({ ...newInv, item: e.target.value }); setShowSuggest(true); }}
+                  onFocus={() => setShowSuggest(true)}
+                  onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+                  onKeyDown={(e) => { if (e.key === "Enter") addInventory(); if (e.key === "Escape") setShowSuggest(false); }}
+                  style={{ ...inp(C, "1 1 100%"), width: "100%" }}
+                />
+                {showSuggest && itemSuggestions.length > 0 && (
+                  <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: C.cream, border: `1px solid ${C.line}`, borderRadius: 10, zIndex: 40, overflow: "hidden", boxShadow: "0 8px 24px rgba(43,38,32,.12)", maxHeight: 260, overflowY: "auto" }}>
+                    {itemSuggestions.map((it) => (
+                      <div key={it.name} onMouseDown={(e) => { e.preventDefault(); pickSuggestion(it); }} style={{ padding: "9px 12px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderBottom: `1px solid ${C.bg}` }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = C.chip)}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                        <span style={{ fontSize: 14 }}>{it.name}</span>
+                        <span style={{ fontSize: 11, color: C.sub }}>{CAT_LABEL[it.cat] || it.cat}{it.unit ? ` · ${it.unit}` : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <input placeholder="Qty" value={newInv.qty} onChange={(e) => setNewInv({ ...newInv, qty: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addInventory()} style={inp(C, "0 1 60px")} />
-              <select value={newInv.unit} onChange={(e) => setNewInv({ ...newInv, unit: e.target.value })} style={inp(C, "0 1 80px")}>
-                {["oz", "lb", "g", "kg", "cup", "tbsp", "tsp", "can", "each"].map((u) => <option key={u} value={u === "each" ? "" : u}>{u}</option>)}
+              <select value={newInv.unit} onChange={(e) => setNewInv({ ...newInv, unit: e.target.value })} style={inp(C, "0 1 90px")}>
+                {["oz", "lb", "g", "kg", "cup", "tbsp", "tsp", "can", "clove", "bunch", "head", "pint", "bag", "scoop", "each"].map((u) => <option key={u} value={u === "each" ? "" : u}>{u}</option>)}
               </select>
               <input placeholder="Low at" value={newInv.lowAt} onChange={(e) => setNewInv({ ...newInv, lowAt: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addInventory()} style={inp(C, "0 1 70px")} title="Warn when quantity drops to this" />
               <button onClick={addInventory} style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 16px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, cursor: "pointer", fontSize: 14, fontWeight: 600 }}><Plus size={16} /> Add</button>
