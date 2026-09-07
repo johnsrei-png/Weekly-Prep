@@ -45,7 +45,7 @@ Rules:
       },
       body: JSON.stringify({
         model: "claude-sonnet-5",
-        max_tokens: 1500,
+        max_tokens: 4000,
         messages: [{ role: "user", content: instruction }],
       }),
     });
@@ -71,8 +71,20 @@ Rules:
       if (m) { try { prices = JSON.parse(m[0]); } catch {} }
     }
 
-    if (!prices || typeof prices !== "object") {
-      return json({ error: "Could not estimate prices", raw: text }, 502);
+    // Salvage: if parsing failed or came back thin (e.g. truncated response),
+    // pull every "key": number pair directly from the text.
+    if (!prices || typeof prices !== "object" || !Object.keys(prices).length) {
+      const salvaged = {};
+      const re = /"([^"]+)"\s*:\s*(-?\d+(?:\.\d+)?)/g;
+      let match;
+      while ((match = re.exec(text)) !== null) {
+        salvaged[match[1]] = parseFloat(match[2]);
+      }
+      if (Object.keys(salvaged).length) prices = salvaged;
+    }
+
+    if (!prices || typeof prices !== "object" || !Object.keys(prices).length) {
+      return json({ error: "Could not estimate prices", raw: text.slice(0, 200) }, 502);
     }
 
     // sanitize: keep only numeric values
