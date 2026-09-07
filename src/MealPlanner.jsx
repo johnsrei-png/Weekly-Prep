@@ -115,6 +115,8 @@ export default function MealPlanner() {
   const [inventory, setInventory] = useState([]); // [{item, qty, unit, lowAt}]
   const [checked, setChecked] = useState({});
   const [tripHidden, setTripHidden] = useState([]);  // item keys taken off for this shopping trip only
+  const [extras, setExtras] = useState([]);          // [{id, text, recurring, done}] non-pantry grocery add-ons
+  const [extraInput, setExtraInput] = useState("");
   const [diet, setDiet] = useState("anything");
   const [defaultServings, setDefaultServings] = useState(4);
   const [loaded, setLoaded] = useState(false);
@@ -175,6 +177,7 @@ export default function MealPlanner() {
     if (s.prefs) setPrefsDraft((p) => ({ ...p, ...s.prefs }));
     setArchives(s.archives || []);
     setSavedIds(s.savedIds || []);
+    setExtras(s.extras || []);
   }
 
   useEffect(() => {
@@ -195,14 +198,14 @@ export default function MealPlanner() {
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded) return;
-    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds };
+    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras };
     if (supabase) {
       if (!household) return;
       supabase.from("meal_planner").upsert({ device_id: household, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, loaded, household]);
+  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, loaded, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -643,6 +646,23 @@ export default function MealPlanner() {
   function removeInventory(idx) { setInventory(inventory.filter((_, i) => i !== idx)); }
   function toggleCheck(key) { setChecked({ ...checked, [key]: !checked[key] }); }
 
+  // ---- Extras: non-pantry grocery add-ons (paper towels, coffee, etc.) ----
+  function addExtra(text) {
+    const t = (text || "").trim();
+    if (!t) return;
+    setExtras((prev) => [...prev, { id: `x_${Date.now()}`, text: t, recurring: false, done: false }]);
+    setExtraInput("");
+  }
+  function toggleExtraDone(id) {
+    setExtras((prev) => prev.map((x) => (x.id === id ? { ...x, done: !x.done } : x)));
+  }
+  function toggleExtraRecurring(id) {
+    setExtras((prev) => prev.map((x) => (x.id === id ? { ...x, recurring: !x.recurring } : x)));
+  }
+  function removeExtra(id) {
+    setExtras((prev) => prev.filter((x) => x.id !== id));
+  }
+
   // "Take off": you actually have this item; the pantry name just didn't match.
   // Add it to the pantry with enough quantity to cover the need (so it matches
   // and clears going forward), and hide it from THIS trip's list.
@@ -689,6 +709,8 @@ export default function MealPlanner() {
     // Start a fresh, empty week.
     setPlan({});
     setChecked({});
+    // Keep recurring extras (uncheck them for the new trip), drop one-time ones.
+    setExtras((prev) => prev.filter((x) => x.recurring).map((x) => ({ ...x, done: false })));
     setShowArchives(true);
   }
 
@@ -806,6 +828,11 @@ export default function MealPlanner() {
       arr.forEach((n) => { txt += n.isSnack ? `  [ ] ${n.item}\n` : `  [ ] ${fmtGrocery(n.needQty, n.unit)} ${n.item}\n`; });
       txt += "\n";
     });
+    if (extras.length) {
+      txt += "EXTRAS\n";
+      extras.forEach((x) => { txt += `  [ ] ${x.text}\n`; });
+      txt += "\n";
+    }
     const blob = new Blob([txt], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1374,7 +1401,11 @@ export default function MealPlanner() {
         {tab === "grocery" && (
           <div>
             {totalNeeded === 0 ? (
-              <Empty C={C} icon={ShoppingCart} title="Nothing to buy yet." sub="Plan some meals, and anything you don't already have in your pantry shows up here." />
+              <div style={{ textAlign: "center", padding: "40px 20px 24px", color: C.sub, fontFamily: uiFont }}>
+                <ShoppingCart size={40} style={{ opacity: .4 }} />
+                <p style={{ fontSize: 16, marginBottom: 4 }}>Nothing from your recipes to buy yet.</p>
+                <p style={{ fontSize: 14, marginTop: 0 }}>Plan some meals, or add extras below.</p>
+              </div>
             ) : (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, fontFamily: uiFont, flexWrap: "wrap", gap: 10 }}>
@@ -1423,6 +1454,42 @@ export default function MealPlanner() {
                 })}
               </>
             )}
+
+            {/* Extras — non-pantry add-ons */}
+            <div style={{ marginBottom: 22 }}>
+              <h3 style={{ fontFamily: uiFont, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.sageD, marginBottom: 8 }}>Extras</h3>
+              {extras.length > 0 && (
+                <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden", marginBottom: 10 }}>
+                  {extras.map((x, i) => (
+                    <div key={x.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                      <div onClick={() => toggleExtraDone(x.id)} style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, cursor: "pointer", border: `2px solid ${x.done ? C.sage : C.line}`, background: x.done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>{x.done && <Check size={14} color="#fff" />}</div>
+                      <span onClick={() => toggleExtraDone(x.id)} style={{ flex: 1, fontFamily: uiFont, fontSize: 15, cursor: "pointer", textDecoration: x.done ? "line-through" : "none", color: x.done ? C.sub : C.ink }}>{x.text}</span>
+                      <button onClick={() => toggleExtraRecurring(x.id)} title={x.recurring ? "Recurring — kept each week. Tap to make one-time." : "One-time — clears next week. Tap to keep weekly."} style={{
+                        flexShrink: 0, display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 14, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: uiFont,
+                        border: `1px solid ${x.recurring ? C.sage : C.line}`, background: x.recurring ? C.sage : "transparent", color: x.recurring ? "#fff" : C.sub,
+                      }}>
+                        <RefreshCw size={12} /> {x.recurring ? "weekly" : "one-time"}
+                      </button>
+                      <button onClick={() => removeExtra(x.id)} title="Remove" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 2, flexShrink: 0 }}><X size={16} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, fontFamily: uiFont }}>
+                <input
+                  value={extraInput}
+                  onChange={(e) => setExtraInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addExtra(extraInput)}
+                  placeholder="Add an item (e.g. paper towels, coffee)"
+                  style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, fontSize: 14, background: C.cream }}
+                />
+                <button onClick={() => addExtra(extraInput)} disabled={!extraInput.trim()} style={{
+                  display: "flex", alignItems: "center", gap: 6, padding: "10px 16px", borderRadius: 9, border: "none",
+                  background: extraInput.trim() ? C.sage : C.line, color: extraInput.trim() ? "#fff" : C.sub,
+                  fontSize: 14, fontWeight: 600, cursor: extraInput.trim() ? "pointer" : "default",
+                }}><Plus size={16} /> Add</button>
+              </div>
+            </div>
           </div>
         )}
 
