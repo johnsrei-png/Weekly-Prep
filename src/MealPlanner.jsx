@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge, Search } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
@@ -125,6 +125,7 @@ export default function MealPlanner() {
   const [newInv, setNewInv] = useState({ item: "", qty: "", unit: "oz", lowAt: "" });
   const [showSuggest, setShowSuggest] = useState(false);
   const [mergeFrom, setMergeFrom] = useState(null);   // index of pantry item being merged into another
+  const [pantrySearch, setPantrySearch] = useState("");
   const [viewRecipe, setViewRecipe] = useState(null);
   const [chatLog, setChatLog] = useState([]);   // [{role, content, recipes?}]
   const [chatInput, setChatInput] = useState("");
@@ -1141,9 +1142,19 @@ export default function MealPlanner() {
                             </div>
                           </div>
                         ) : (
-                          <button onClick={() => { setAddingFor(r.id); setAddMeal((r.tags || []).includes("breakfast") ? "breakfast" : "dinner"); }} style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-                            <CalendarPlus size={14} /> Add to plan
-                          </button>
+                          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <button onClick={() => { setAddingFor(r.id); setAddMeal((r.tags || []).includes("breakfast") ? "breakfast" : "dinner"); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                              <CalendarPlus size={14} /> Add to plan
+                            </button>
+                            <button onClick={() => savedIds.includes(r.id) ? unsaveRecipe(r.id) : saveRecipe(r)} style={{
+                              display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                              background: savedIds.includes(r.id) ? C.sage : "transparent",
+                              color: savedIds.includes(r.id) ? "#fff" : C.sageD,
+                              border: `1px solid ${savedIds.includes(r.id) ? C.sage : C.line}`,
+                            }}>
+                              <Bookmark size={14} fill={savedIds.includes(r.id) ? "#fff" : "none"} /> {savedIds.includes(r.id) ? "Saved" : "Save to Recipes"}
+                            </button>
+                          </div>
                         )}
                       </div>
                     ))}
@@ -1636,15 +1647,37 @@ export default function MealPlanner() {
                     <button onClick={() => setMergeFrom(null)} style={{ background: "none", border: `1px solid ${C.clay}`, color: C.clay, borderRadius: 8, padding: "4px 12px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancel</button>
                   </div>
                 )}
+                {inventory.length > 4 && (
+                  <div style={{ position: "relative", marginBottom: 10, fontFamily: uiFont }}>
+                    <Search size={15} color={C.sub} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)" }} />
+                    <input
+                      value={pantrySearch}
+                      onChange={(e) => setPantrySearch(e.target.value)}
+                      placeholder="Search pantry…"
+                      style={{ width: "100%", padding: "9px 12px 9px 34px", borderRadius: 9, border: `1px solid ${C.line}`, fontSize: 14, background: C.cream }}
+                    />
+                    {pantrySearch && (
+                      <button onClick={() => setPantrySearch("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 4 }}><X size={15} /></button>
+                    )}
+                  </div>
+                )}
+                {(() => {
+                  const q = norm(pantrySearch);
+                  const shown = inventory.filter((inv) => !q || norm(inv.item).includes(q));
+                  if (!shown.length) {
+                    return <div style={{ fontFamily: uiFont, fontSize: 14, color: C.sub, padding: "16px 4px" }}>No pantry items match "{pantrySearch}".</div>;
+                  }
+                  return (
                 <div style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
                   {inventory.map((inv, i) => {
+                    if (q && !norm(inv.item).includes(q)) return null;
                     const low = inv.lowAt && parseFloat(inv.qty) <= parseFloat(inv.lowAt);
                     const isMergeSource = mergeFrom === i;
                     const isMergeTarget = mergeFrom !== null && mergeFrom !== i;
                     return (
                       <div key={i}
                         onClick={() => { if (isMergeTarget) mergeInventory(mergeFrom, i); }}
-                        style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: uiFont, background: isMergeSource ? "#FBF1DC" : (low ? "#FDF6E7" : "transparent"), cursor: isMergeTarget ? "pointer" : "default", outline: isMergeTarget ? `1px dashed ${C.sage}` : "none", outlineOffset: -3 }}>
+                        style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: `1px solid ${C.line}`, fontFamily: uiFont, background: isMergeSource ? "#FBF1DC" : (low ? "#FDF6E7" : "transparent"), cursor: isMergeTarget ? "pointer" : "default", outline: isMergeTarget ? `1px dashed ${C.sage}` : "none", outlineOffset: -3 }}>
                         <span style={{ flex: 1, fontSize: 15 }}>
                           <strong style={{ fontWeight: 600 }}>{inv.qty}{inv.unit ? " " + inv.unit : ""}</strong> {inv.item}
                           {low && <span style={{ color: C.amber, fontSize: 12, marginLeft: 8 }}>· low</span>}
@@ -1663,6 +1696,8 @@ export default function MealPlanner() {
                     );
                   })}
                 </div>
+                  );
+                })()}
               </>
             )}
           </div>
