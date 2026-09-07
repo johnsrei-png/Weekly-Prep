@@ -20,6 +20,9 @@
 [functions."parse-receipt"]
   timeout = 26
 
+[functions."estimate-cost"]
+  timeout = 26
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
