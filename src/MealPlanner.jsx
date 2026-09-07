@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
@@ -1036,6 +1036,13 @@ export default function MealPlanner() {
                                 </div>
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); savedIds.includes(r.id) ? unsaveRecipe(r.id) : saveRecipe(r); }}
+                                  title={savedIds.includes(r.id) ? "Saved to Recipes — tap to remove" : "Save to Recipes"}
+                                  style={{ ...stepBtn(C), background: savedIds.includes(r.id) ? C.sage : C.cream, borderColor: savedIds.includes(r.id) ? C.sage : C.line }}
+                                >
+                                  <Bookmark size={14} color={savedIds.includes(r.id) ? "#fff" : C.ink} fill={savedIds.includes(r.id) ? "#fff" : "none"} />
+                                </button>
                                 <button onClick={(e) => { e.stopPropagation(); clearSlot(day, m.id); }} title="Remove meal" style={stepBtn(C)}><X size={14} /></button>
                               </div>
                             </>
