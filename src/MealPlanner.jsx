@@ -914,10 +914,20 @@ export default function MealPlanner() {
   }
 
   // ---- Cook a meal: subtract its ingredients from the pantry ----
-  function cookMeal(recipe, servings, slotKey) {
+  // Helper: all slot keys ("day|meal") currently using this recipe id.
+  function slotsForRecipe(recipeId) {
+    const keys = [];
+    DAYS.forEach((day) => MEALS.forEach((m) => {
+      if (plan[day]?.[m.id]?.recipeId === recipeId) keys.push(`${day}|${m.id}`);
+    }));
+    return keys;
+  }
+
+  function cookMeal(recipe, slotKey) {
     if (!recipe) return;
     if (cookedSlots[slotKey]) return;   // already cooked — don't deplete twice
-    const scale = (servings || recipe.servings) / (recipe.servings || 1);
+    // one batch, scaled to the current default servings (matches the grocery model)
+    const scale = defaultServings / (recipe.servings || 1);
     setInventory((prev) => {
       const next = prev.map((inv) => ({ ...inv }));
       recipe.ingredients.forEach((ing) => {
@@ -937,11 +947,22 @@ export default function MealPlanner() {
       });
       return next;
     });
-    setCookedSlots((prev) => ({ ...prev, [slotKey]: true }));
+    // mark EVERY slot using this recipe as cooked (batch cooked once, eaten across days)
+    const keys = slotsForRecipe(recipe.id);
+    setCookedSlots((prev) => {
+      const n = { ...prev };
+      keys.forEach((k) => { n[k] = true; });
+      return n;
+    });
   }
-  // Undo a "cooked" mark (does NOT restore pantry amounts — just clears the flag).
-  function uncookSlot(slotKey) {
-    setCookedSlots((prev) => { const n = { ...prev }; delete n[slotKey]; return n; });
+  // Undo the "cooked" mark for this recipe across all its slots (does NOT restore pantry).
+  function uncookRecipe(recipeId) {
+    const keys = slotsForRecipe(recipeId);
+    setCookedSlots((prev) => {
+      const n = { ...prev };
+      keys.forEach((k) => { delete n[k]; });
+      return n;
+    });
   }
 
   // Recipes currently used in the week that aren't yet saved (for quick "save from week")
@@ -1423,8 +1444,8 @@ export default function MealPlanner() {
                                   const cooked = cookedSlots[slotKey];
                                   return (
                                     <button
-                                      onClick={(e) => { e.stopPropagation(); cooked ? uncookSlot(slotKey) : cookMeal(r, entry.servings, slotKey); }}
-                                      title={cooked ? "Cooked — tap to unmark (won't restore pantry)" : "Cooked it — subtract ingredients from pantry"}
+                                      onClick={(e) => { e.stopPropagation(); cooked ? uncookRecipe(r.id) : cookMeal(r, slotKey); }}
+                                      title={cooked ? "Cooked — tap to unmark (won't restore pantry)" : "Cooked it — subtract one batch from pantry (marks all days with this meal)"}
                                       style={{ ...stepBtn(C), width: "auto", padding: "0 8px", gap: 4, fontSize: 12, fontWeight: 600, color: cooked ? "#fff" : C.sageD, background: cooked ? C.sage : C.cream, borderColor: cooked ? C.sage : C.line }}
                                     >
                                       {cooked ? <><Check size={13} /> Cooked</> : <><Utensils size={13} /> Cooked</>}
