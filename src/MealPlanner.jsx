@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge, Search } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge, Search, Star } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
@@ -116,6 +116,7 @@ export default function MealPlanner() {
   const [checked, setChecked] = useState({});
   const [tripHidden, setTripHidden] = useState([]);  // item keys taken off for this shopping trip only
   const [extras, setExtras] = useState([]);          // [{id, text, recurring, done}] non-pantry grocery add-ons
+  const [ratings, setRatings] = useState({});        // recipeId -> 1..5 stars
   const [extraInput, setExtraInput] = useState("");
   const [diet, setDiet] = useState("anything");
   const [defaultServings, setDefaultServings] = useState(4);
@@ -180,6 +181,7 @@ export default function MealPlanner() {
     setArchives(s.archives || []);
     setSavedIds(s.savedIds || []);
     setExtras(s.extras || []);
+    setRatings(s.ratings || {});
   }
 
   useEffect(() => {
@@ -200,14 +202,14 @@ export default function MealPlanner() {
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded) return;
-    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras };
+    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings };
     if (supabase) {
       if (!household) return;
       supabase.from("meal_planner").upsert({ device_id: household, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, loaded, household]);
+  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, loaded, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -774,8 +776,11 @@ export default function MealPlanner() {
 
   // ---- Saved recipe library ----------------------------------------------
   const savedRecipes = useMemo(
-    () => savedIds.map((id) => recipes.find((r) => r.id === id)).filter(Boolean),
-    [savedIds, recipes]
+    () => savedIds
+      .map((id) => recipes.find((r) => r.id === id))
+      .filter(Boolean)
+      .sort((a, b) => (ratings[b.id] || 0) - (ratings[a.id] || 0)),   // highest rated first
+    [savedIds, recipes, ratings]
   );
 
   function saveRecipe(recipe) {
@@ -785,6 +790,14 @@ export default function MealPlanner() {
   }
   function unsaveRecipe(id) {
     setSavedIds((prev) => prev.filter((x) => x !== id));
+  }
+  function setRating(id, stars) {
+    setRatings((prev) => {
+      const next = { ...prev };
+      if (prev[id] === stars) delete next[id];   // tapping the current rating clears it
+      else next[id] = stars;
+      return next;
+    });
   }
 
   // Recipes currently used in the week that aren't yet saved (for quick "save from week")
@@ -1412,6 +1425,14 @@ export default function MealPlanner() {
                       <div style={{ flex: "1 1 160px" }}>
                         <div style={{ fontSize: 16, fontWeight: 600, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
                         <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>{r.time} min · makes {r.servings} · {(r.tags || []).slice(0, 3).join(", ")}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 2, marginTop: 6 }}>
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <button key={s} onClick={() => setRating(r.id, s)} title={`${s} star${s > 1 ? "s" : ""}`} style={{ background: "none", border: "none", cursor: "pointer", padding: 1, display: "flex" }}>
+                              <Star size={17} color={C.clay} fill={(ratings[r.id] || 0) >= s ? C.clay : "none"} />
+                            </button>
+                          ))}
+                          {ratings[r.id] > 0 && <span style={{ fontSize: 11, color: C.sub, marginLeft: 4 }}>tap again to clear</span>}
+                        </div>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <button onClick={() => setAddingSavedFor(addingSavedFor?.recipeId === r.id ? null : { recipeId: r.id, meal: (r.tags || []).includes("breakfast") ? "breakfast" : (r.tags || []).includes("lunch") ? "lunch" : "dinner" })} style={{
