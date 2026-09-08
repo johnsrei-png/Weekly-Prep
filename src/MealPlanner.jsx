@@ -1654,15 +1654,19 @@ export default function MealPlanner() {
                   </div>
                   <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
                     {receiptItems.map((it, idx) => (
-                      <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, background: it.include ? C.bg : "transparent", border: `1px solid ${C.line}`, borderRadius: 9, padding: "7px 10px", opacity: it.include ? 1 : .55 }}>
-                        <button onClick={() => toggleReceiptItem(idx)} style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${it.include ? C.sage : C.line}`, background: it.include ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                      <div key={idx} style={{ display: "flex", alignItems: isMobile ? "flex-start" : "center", gap: 8, background: it.include ? C.bg : "transparent", border: `1px solid ${C.line}`, borderRadius: 9, padding: "8px 10px", opacity: it.include ? 1 : .55 }}>
+                        <button onClick={() => toggleReceiptItem(idx)} style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, marginTop: isMobile ? 2 : 0, border: `2px solid ${it.include ? C.sage : C.line}`, background: it.include ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
                           {it.include && <Check size={14} color="#fff" />}
                         </button>
-                        <input value={it.item} onChange={(e) => editReceiptItem(idx, "item", e.target.value)} style={{ flex: "2 1 100px", padding: "6px 9px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream }} />
-                        <input value={it.qty} onChange={(e) => editReceiptItem(idx, "qty", e.target.value)} style={{ flex: "0 1 50px", padding: "6px 9px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream }} />
-                        <select value={it.unit} onChange={(e) => editReceiptItem(idx, "unit", e.target.value)} style={{ flex: "0 1 74px", padding: "6px 6px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream }}>
-                          {["", "oz", "lb", "g", "kg", "cup", "can", "bunch", "head", "pint", "bag"].map((u) => <option key={u || "each"} value={u}>{u || "each"}</option>)}
-                        </select>
+                        <div style={{ flex: 1, display: "flex", flexDirection: isMobile ? "column" : "row", gap: 6, minWidth: 0 }}>
+                          <input value={it.item} onChange={(e) => editReceiptItem(idx, "item", e.target.value)} placeholder="item" style={{ flex: isMobile ? "1 1 auto" : "2 1 100px", width: isMobile ? "100%" : "auto", padding: "7px 9px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream }} />
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <input value={it.qty} onChange={(e) => editReceiptItem(idx, "qty", e.target.value)} placeholder="qty" style={{ flex: isMobile ? "1 1 0" : "0 1 50px", width: isMobile ? "auto" : undefined, padding: "7px 9px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream, minWidth: 0 }} />
+                            <select value={it.unit} onChange={(e) => editReceiptItem(idx, "unit", e.target.value)} style={{ flex: isMobile ? "1 1 0" : "0 1 74px", width: isMobile ? "auto" : undefined, padding: "7px 6px", borderRadius: 7, border: `1px solid ${C.line}`, fontSize: 13, background: C.cream, minWidth: 0 }}>
+                              {["", "oz", "lb", "g", "kg", "cup", "can", "bunch", "head", "pint", "bag"].map((u) => <option key={u || "each"} value={u}>{u || "each"}</option>)}
+                            </select>
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
