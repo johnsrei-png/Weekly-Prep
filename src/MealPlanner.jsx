@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge, Search, Star } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge, Search, Star, Pencil } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
@@ -193,6 +193,10 @@ export default function MealPlanner() {
   const [codeInput, setCodeInput] = useState("");
   const [showHousehold, setShowHousehold] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [editDraft, setEditDraft] = useState(null);   // editable copy of the recipe in the modal
+  const [cookedFlash, setCookedFlash] = useState(null); // shows a brief "pantry updated" confirmation
+  const [shopMode, setShopMode] = useState(false);      // full-screen in-store shopping view
+  const [shopChecked, setShopChecked] = useState({});   // checked state within shopping mode
 
   // ---- Load state (Supabase keyed by household code, else localStorage) ----
   function migratePlan(oldPlan) {
@@ -617,6 +621,19 @@ export default function MealPlanner() {
   const totalNeeded = Object.values(groceryList).reduce((a, arr) => a + arr.length, 0);
   const lowStock = inventory.filter((inv) => inv.lowAt && parseFloat(inv.qty) <= parseFloat(inv.lowAt));
 
+  // Combined shopping list for in-store mode: grocery items + extras + low-stock staples.
+  const shoppingItems = useMemo(() => {
+    const out = [];
+    CAT_ORDER.forEach((cat) => {
+      (groceryList[cat] || []).forEach((n) => {
+        out.push({ key: "g:" + norm(n.item) + (n.unit || ""), label: n.isSnack ? n.item : `${fmtGrocery(n.needQty, n.unit)} ${n.item}`, group: CAT_LABEL[cat] });
+      });
+    });
+    extras.forEach((x) => out.push({ key: "x:" + x.id, label: x.text, group: "Extras" }));
+    lowStock.forEach((inv) => out.push({ key: "l:" + norm(inv.item), label: `${inv.item} (running low)`, group: "Restock" }));
+    return out;
+  }, [groceryList, extras, lowStock]);
+
   // ---- Inventory ops ------------------------------------------------------
   function addInventory() {
     if (!newInv.item.trim()) return;
@@ -846,6 +863,81 @@ export default function MealPlanner() {
       else next[id] = stars;
       return next;
     });
+  }
+
+  // ---- Recipe editing ----------------------------------------------------
+  function startEdit(recipe) {
+    // deep copy so edits don't touch the live recipe until saved
+    setEditDraft(JSON.parse(JSON.stringify(recipe)));
+  }
+  function editField(field, value) {
+    setEditDraft((prev) => ({ ...prev, [field]: value }));
+  }
+  function editIngredient(i, field, value) {
+    setEditDraft((prev) => {
+      const ingredients = prev.ingredients.map((ing, idx) => (idx === i ? { ...ing, [field]: value } : ing));
+      return { ...prev, ingredients };
+    });
+  }
+  function addEditIngredient() {
+    setEditDraft((prev) => ({ ...prev, ingredients: [...prev.ingredients, { item: "", qty: 1, unit: "", cat: "pantry" }] }));
+  }
+  function removeEditIngredient(i) {
+    setEditDraft((prev) => ({ ...prev, ingredients: prev.ingredients.filter((_, idx) => idx !== i) }));
+  }
+  function editStep(i, value) {
+    setEditDraft((prev) => ({ ...prev, steps: (prev.steps || []).map((s, idx) => (idx === i ? value : s)) }));
+  }
+  function addEditStep() {
+    setEditDraft((prev) => ({ ...prev, steps: [...(prev.steps || []), ""] }));
+  }
+  function removeEditStep(i) {
+    setEditDraft((prev) => ({ ...prev, steps: (prev.steps || []).filter((_, idx) => idx !== i) }));
+  }
+  function saveEdit() {
+    const d = editDraft;
+    if (!d) return;
+    // clean up: coerce numbers, drop blank ingredients/steps
+    const cleaned = {
+      ...d,
+      time: parseInt(d.time) || 0,
+      servings: Math.max(1, parseInt(d.servings) || 1),
+      tags: Array.isArray(d.tags) ? d.tags : String(d.tags || "").split(",").map((t) => t.trim()).filter(Boolean),
+      ingredients: d.ingredients
+        .filter((ing) => ing.item.trim())
+        .map((ing) => ({ ...ing, item: ing.item.trim().toLowerCase(), qty: parseFloat(ing.qty) || 0 })),
+      steps: (d.steps || []).map((s) => s.trim()).filter(Boolean),
+    };
+    setRecipes((prev) => prev.map((r) => (r.id === cleaned.id ? cleaned : r)));
+    setViewRecipe(cleaned);   // keep modal open showing the saved version
+    setEditDraft(null);
+  }
+
+  // ---- Cook a meal: subtract its ingredients from the pantry ----
+  function cookMeal(recipe, servings) {
+    if (!recipe) return;
+    const scale = (servings || recipe.servings) / (recipe.servings || 1);
+    setInventory((prev) => {
+      const next = prev.map((inv) => ({ ...inv }));
+      recipe.ingredients.forEach((ing) => {
+        const idx = next.findIndex((inv) => norm(inv.item) === norm(ing.item));
+        if (idx < 0) return;                // don't have it tracked; skip
+        const have = next[idx];
+        const needBase = toBase(ing.qty * scale, ing.unit);
+        const haveBase = toBase(parseFloat(have.qty) || 0, have.unit);
+        if (needBase.base === haveBase.base && needBase.base !== "count") {
+          const haveUnitFactor = toBase(1, have.unit).val || 1;
+          const remaining = Math.max(0, haveBase.val - needBase.val) / haveUnitFactor;
+          next[idx].qty = String(Math.round(remaining * 100) / 100);
+        } else {
+          const remaining = Math.max(0, (parseFloat(have.qty) || 0) - ing.qty * scale);
+          next[idx].qty = String(Math.round(remaining * 100) / 100);
+        }
+      });
+      return next;
+    });
+    setCookedFlash(recipe.id + "|" + Date.now());
+    setTimeout(() => setCookedFlash(null), 2000);
   }
 
   // Recipes currently used in the week that aren't yet saved (for quick "save from week")
@@ -1324,6 +1416,13 @@ export default function MealPlanner() {
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
                                 <button
+                                  onClick={(e) => { e.stopPropagation(); cookMeal(r, entry.servings); }}
+                                  title="Cooked it — subtract ingredients from pantry"
+                                  style={{ ...stepBtn(C), width: "auto", padding: "0 8px", gap: 4, fontSize: 12, fontWeight: 600, color: C.sageD }}
+                                >
+                                  <Utensils size={13} /> {cookedFlash && cookedFlash.startsWith(r.id + "|") ? "✓" : "Cooked"}
+                                </button>
+                                <button
                                   onClick={(e) => { e.stopPropagation(); savedIds.includes(r.id) ? unsaveRecipe(r.id) : saveRecipe(r); }}
                                   title={savedIds.includes(r.id) ? "Saved to Recipes — tap to remove" : "Save to Recipes"}
                                   style={{ ...stepBtn(C), background: savedIds.includes(r.id) ? C.sage : C.cream, borderColor: savedIds.includes(r.id) ? C.sage : C.line }}
@@ -1544,7 +1643,10 @@ export default function MealPlanner() {
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, fontFamily: uiFont, flexWrap: "wrap", gap: 10 }}>
                   <span style={{ fontSize: 14, color: C.sub }}>{totalNeeded} items · each recipe once, scaled to {defaultServings} servings · pantry deducted</span>
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button onClick={() => { setShopChecked({}); setShopMode(true); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: C.clay, color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
+                      <ShoppingCart size={16} /> Shop
+                    </button>
                     <button onClick={estimateCost} disabled={costEstimating} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: C.cream, color: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, cursor: costEstimating ? "wait" : "pointer", fontSize: 14, fontWeight: 600, opacity: costEstimating ? .7 : 1 }}>
                       <DollarSign size={16} /> {costEstimating ? "Estimating…" : "Estimate cost"}
                     </button>
@@ -1789,15 +1891,84 @@ export default function MealPlanner() {
 
       {/* Recipe modal */}
       {viewRecipe && (() => {
+        const editing = editDraft && editDraft.id === viewRecipe.id;
         const baseServings = viewRecipe.servings || 1;
         const scale = defaultServings / baseServings;
         const scaled = scale !== 1;
+        const closeAll = () => { setViewRecipe(null); setEditDraft(null); };
         return (
-        <div onClick={() => setViewRecipe(null)} style={{ position: "fixed", inset: 0, background: "rgba(43,38,32,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, borderRadius: 16, maxWidth: 480, width: "100%", maxHeight: "85vh", overflow: "auto", padding: isMobile ? 18 : 26 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div onClick={closeAll} style={{ position: "fixed", inset: 0, background: "rgba(43,38,32,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, borderRadius: 16, maxWidth: 520, width: "100%", maxHeight: "85vh", overflow: "auto", padding: isMobile ? 18 : 26 }}>
+
+            {editing ? (
+              /* ---- EDIT MODE ---- */
+              <div style={{ fontFamily: uiFont }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                  <span style={{ fontFamily: "Georgia, serif", fontSize: 18, fontWeight: 700 }}>Edit recipe</span>
+                  <button onClick={() => setEditDraft(null)} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub }}><X size={22} /></button>
+                </div>
+
+                <label style={prefLabel(C)}>Name</label>
+                <input value={editDraft.name} onChange={(e) => editField("name", e.target.value)} style={{ ...inp(C, "1 1 100%"), width: "100%", marginBottom: 12 }} />
+
+                <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={prefLabel(C)}>Time (min)</label>
+                    <input value={editDraft.time} onChange={(e) => editField("time", e.target.value)} inputMode="numeric" style={{ ...inp(C, "1 1 100%"), width: "100%" }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={prefLabel(C)}>Servings</label>
+                    <input value={editDraft.servings} onChange={(e) => editField("servings", e.target.value)} inputMode="numeric" style={{ ...inp(C, "1 1 100%"), width: "100%" }} />
+                  </div>
+                </div>
+
+                <label style={prefLabel(C)}>Tags (comma-separated)</label>
+                <input value={Array.isArray(editDraft.tags) ? editDraft.tags.join(", ") : editDraft.tags} onChange={(e) => editField("tags", e.target.value.split(",").map((t) => t.trim()).filter(Boolean))} placeholder="dinner, quick, vegetarian" style={{ ...inp(C, "1 1 100%"), width: "100%", marginBottom: 16 }} />
+
+                <label style={prefLabel(C)}>Ingredients</label>
+                <div style={{ display: "grid", gap: 6, marginBottom: 8 }}>
+                  {editDraft.ingredients.map((ing, i) => (
+                    <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: isMobile ? "wrap" : "nowrap" }}>
+                      <input value={ing.qty} onChange={(e) => editIngredient(i, "qty", e.target.value)} placeholder="qty" inputMode="decimal" style={{ ...inp(C, "0 0 auto"), width: 52, padding: "7px 8px", fontSize: 13 }} />
+                      <select value={ing.unit} onChange={(e) => editIngredient(i, "unit", e.target.value)} style={{ ...inp(C, "0 0 auto"), width: 72, padding: "7px 6px", fontSize: 13 }}>
+                        {["", "oz", "lb", "g", "kg", "cup", "tbsp", "tsp", "can", "clove", "bunch", "head", "pint", "bag"].map((u) => <option key={u || "each"} value={u}>{u || "each"}</option>)}
+                      </select>
+                      <input value={ing.item} onChange={(e) => editIngredient(i, "item", e.target.value)} placeholder="ingredient" style={{ ...inp(C, "1 1 90px"), padding: "7px 9px", fontSize: 13 }} />
+                      <select value={ing.cat} onChange={(e) => editIngredient(i, "cat", e.target.value)} style={{ ...inp(C, "0 0 auto"), width: 96, padding: "7px 6px", fontSize: 12 }}>
+                        {CAT_ORDER.filter((c) => c !== "snacks").map((c) => <option key={c} value={c}>{CAT_LABEL[c]}</option>)}
+                      </select>
+                      <button onClick={() => removeEditIngredient(i)} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", flexShrink: 0, padding: 2 }}><X size={15} /></button>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={addEditIngredient} style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", background: "transparent", border: `1px dashed ${C.line}`, borderRadius: 8, color: C.sageD, fontSize: 13, cursor: "pointer", marginBottom: 16 }}><Plus size={14} /> Add ingredient</button>
+
+                <label style={prefLabel(C)}>Steps</label>
+                <div style={{ display: "grid", gap: 6, marginBottom: 8 }}>
+                  {(editDraft.steps || []).map((s, i) => (
+                    <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                      <span style={{ fontSize: 13, color: C.sub, marginTop: 9, flexShrink: 0 }}>{i + 1}.</span>
+                      <textarea value={s} onChange={(e) => editStep(i, e.target.value)} rows={2} style={{ ...inp(C, "1 1 100%"), width: "100%", padding: "7px 9px", fontSize: 13, resize: "vertical", fontFamily: uiFont }} />
+                      <button onClick={() => removeEditStep(i)} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", flexShrink: 0, padding: 2, marginTop: 6 }}><X size={15} /></button>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={addEditStep} style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", background: "transparent", border: `1px dashed ${C.line}`, borderRadius: 8, color: C.sageD, fontSize: 13, cursor: "pointer", marginBottom: 18 }}><Plus size={14} /> Add step</button>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={saveEdit} style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 18px", background: C.sage, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer" }}><Check size={16} /> Save changes</button>
+                  <button onClick={() => setEditDraft(null)} style={{ padding: "10px 18px", background: "transparent", color: C.sub, border: `1px solid ${C.line}`, borderRadius: 10, fontSize: 14, cursor: "pointer" }}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              /* ---- VIEW MODE ---- */
+              <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
               <h2 style={{ margin: 0, fontSize: 24 }}>{viewRecipe.name}</h2>
-              <button onClick={() => setViewRecipe(null)} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub }}><X size={22} /></button>
+              <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                <button onClick={() => startEdit(viewRecipe)} title="Edit recipe" style={{ background: "none", border: "none", cursor: "pointer", color: C.sageD, display: "flex", padding: 4 }}><Pencil size={19} /></button>
+                <button onClick={closeAll} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 4 }}><X size={22} /></button>
+              </div>
             </div>
             <p style={{ fontFamily: uiFont, fontSize: 13, color: C.sub }}>
               {viewRecipe.time} min · scaled to {defaultServings} {defaultServings === 1 ? "serving" : "servings"}
@@ -1815,14 +1986,58 @@ export default function MealPlanner() {
                 </ol>
               </>
             )}
+              </>
+            )}
           </div>
         </div>
+        );
+      })()}
+      {/* Shopping mode — full-screen in-store checklist */}
+      {shopMode && (() => {
+        const remaining = shoppingItems.filter((it) => !shopChecked[it.key]).length;
+        const groups = {};
+        shoppingItems.forEach((it) => { (groups[it.group] ||= []).push(it); });
+        const groupOrder = [...CAT_ORDER.map((c) => CAT_LABEL[c]), "Extras", "Restock"];
+        return (
+          <div style={{ position: "fixed", inset: 0, background: C.bg, zIndex: 60, display: "flex", flexDirection: "column", fontFamily: uiFont }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 18px", borderBottom: `1px solid ${C.line}`, background: C.cream }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>Shopping</div>
+                <div style={{ fontSize: 13, color: C.sub }}>{remaining} of {shoppingItems.length} left</div>
+              </div>
+              <button onClick={() => setShopMode(false)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 18px", background: C.sage, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+                <Check size={17} /> Done
+              </button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px 40px", maxWidth: 700, margin: "0 auto", width: "100%" }}>
+              {shoppingItems.length === 0 ? (
+                <div style={{ textAlign: "center", color: C.sub, padding: "60px 20px", fontSize: 16 }}>Nothing to shop for.</div>
+              ) : groupOrder.filter((g) => groups[g]?.length).map((g) => (
+                <div key={g} style={{ marginBottom: 18 }}>
+                  <h3 style={{ fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.sageD, marginBottom: 6 }}>{g}</h3>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {groups[g].map((it) => {
+                      const done = shopChecked[it.key];
+                      return (
+                        <button key={it.key} onClick={() => setShopChecked((p) => ({ ...p, [it.key]: !p[it.key] }))} style={{
+                          display: "flex", alignItems: "center", gap: 14, padding: "16px 16px", borderRadius: 12, cursor: "pointer", textAlign: "left", width: "100%",
+                          border: `1px solid ${C.line}`, background: done ? "#F0EFE8" : C.cream,
+                        }}>
+                          <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, border: `2px solid ${done ? C.sage : C.line}`, background: done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>{done && <Check size={18} color="#fff" />}</div>
+                          <span style={{ fontSize: 17, textDecoration: done ? "line-through" : "none", color: done ? C.sub : C.ink }}>{it.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         );
       })()}
     </div>
   );
 }
-
 function stepBtn(C) {
   return { width: 26, height: 26, borderRadius: 7, border: `1px solid ${C.line}`, background: C.cream, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.ink };
 }
