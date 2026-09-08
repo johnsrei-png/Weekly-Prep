@@ -102,6 +102,41 @@ function fmtGrocery(qty, unit) {
   return `${fmtQty(qty)}${unit ? " " + unit : ""}`;
 }
 
+// Read an image file, downscale it (max ~1600px long edge) and re-encode as
+// JPEG so uploads stay small and reliable. Returns { base64, mediaType }.
+// Falls back to the raw file if anything goes wrong.
+function fileToCompressedBase64(file, maxDim = 1600, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            if (width >= height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+            else { width = Math.round(width * (maxDim / height)); height = maxDim; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width; canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL("image/jpeg", quality);
+          resolve({ base64: dataUrl.split(",")[1], mediaType: "image/jpeg" });
+        } catch (e) {
+          // fall back to raw
+          const raw = String(reader.result);
+          resolve({ base64: raw.split(",")[1], mediaType: file.type || "image/jpeg" });
+        }
+      };
+      img.onerror = () => reject(new Error("Could not load image"));
+      img.src = String(reader.result);
+    };
+    reader.onerror = () => reject(new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function MealPlanner() {
   const [tab, setTab] = useState("plan");
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" && window.innerWidth < 640);
@@ -600,14 +635,7 @@ export default function MealPlanner() {
     setReceiptItems(null);
     setReceiptParsing(true);
     try {
-      const dataUrl = await new Promise((res, rej) => {
-        const reader = new FileReader();
-        reader.onload = () => res(reader.result);
-        reader.onerror = () => rej(new Error("Could not read file"));
-        reader.readAsDataURL(file);
-      });
-      const base64 = String(dataUrl).split(",")[1];
-      const mediaType = file.type || "image/jpeg";
+      const { base64, mediaType } = await fileToCompressedBase64(file);
       const resp = await fetch("/.netlify/functions/parse-receipt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -815,14 +843,7 @@ export default function MealPlanner() {
     setParseError("");
     setParsing(true);
     try {
-      const dataUrl = await new Promise((res, rej) => {
-        const reader = new FileReader();
-        reader.onload = () => res(reader.result);
-        reader.onerror = () => rej(new Error("Could not read file"));
-        reader.readAsDataURL(file);
-      });
-      const base64 = String(dataUrl).split(",")[1];
-      const mediaType = file.type || "image/jpeg";
+      const { base64, mediaType } = await fileToCompressedBase64(file);
       const resp = await fetch("/.netlify/functions/parse-recipe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
