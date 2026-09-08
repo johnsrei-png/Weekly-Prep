@@ -194,7 +194,7 @@ export default function MealPlanner() {
   const [showHousehold, setShowHousehold] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [editDraft, setEditDraft] = useState(null);   // editable copy of the recipe in the modal
-  const [cookedFlash, setCookedFlash] = useState(null); // shows a brief "pantry updated" confirmation
+  const [cookedSlots, setCookedSlots] = useState({}); // "day|meal" -> true once cooked (prevents double-deplete)
   const [shopMode, setShopMode] = useState(false);      // full-screen in-store shopping view
   const [shopChecked, setShopChecked] = useState({});   // checked state within shopping mode
 
@@ -914,8 +914,9 @@ export default function MealPlanner() {
   }
 
   // ---- Cook a meal: subtract its ingredients from the pantry ----
-  function cookMeal(recipe, servings) {
+  function cookMeal(recipe, servings, slotKey) {
     if (!recipe) return;
+    if (cookedSlots[slotKey]) return;   // already cooked — don't deplete twice
     const scale = (servings || recipe.servings) / (recipe.servings || 1);
     setInventory((prev) => {
       const next = prev.map((inv) => ({ ...inv }));
@@ -936,8 +937,11 @@ export default function MealPlanner() {
       });
       return next;
     });
-    setCookedFlash(recipe.id + "|" + Date.now());
-    setTimeout(() => setCookedFlash(null), 2000);
+    setCookedSlots((prev) => ({ ...prev, [slotKey]: true }));
+  }
+  // Undo a "cooked" mark (does NOT restore pantry amounts — just clears the flag).
+  function uncookSlot(slotKey) {
+    setCookedSlots((prev) => { const n = { ...prev }; delete n[slotKey]; return n; });
   }
 
   // Recipes currently used in the week that aren't yet saved (for quick "save from week")
@@ -974,7 +978,7 @@ export default function MealPlanner() {
   // Clear a stale cost estimate whenever the grocery list changes.
   useEffect(() => { setCostEstimate(null); setCostSig(null); }, [aggregated, plan]);
   // Reset "taken off for this trip" items when the plan changes (new trip).
-  useEffect(() => { setTripHidden([]); }, [plan]);
+  useEffect(() => { setTripHidden([]); setCookedSlots({}); }, [plan]);
 
   async function estimateCost() {
     setCostError("");
@@ -1415,13 +1419,18 @@ export default function MealPlanner() {
                                 </div>
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: uiFont }}>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); cookMeal(r, entry.servings); }}
-                                  title="Cooked it — subtract ingredients from pantry"
-                                  style={{ ...stepBtn(C), width: "auto", padding: "0 8px", gap: 4, fontSize: 12, fontWeight: 600, color: C.sageD }}
-                                >
-                                  <Utensils size={13} /> {cookedFlash && cookedFlash.startsWith(r.id + "|") ? "✓" : "Cooked"}
-                                </button>
+                                {(() => {
+                                  const cooked = cookedSlots[slotKey];
+                                  return (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); cooked ? uncookSlot(slotKey) : cookMeal(r, entry.servings, slotKey); }}
+                                      title={cooked ? "Cooked — tap to unmark (won't restore pantry)" : "Cooked it — subtract ingredients from pantry"}
+                                      style={{ ...stepBtn(C), width: "auto", padding: "0 8px", gap: 4, fontSize: 12, fontWeight: 600, color: cooked ? "#fff" : C.sageD, background: cooked ? C.sage : C.cream, borderColor: cooked ? C.sage : C.line }}
+                                    >
+                                      {cooked ? <><Check size={13} /> Cooked</> : <><Utensils size={13} /> Cooked</>}
+                                    </button>
+                                  );
+                                })()}
                                 <button
                                   onClick={(e) => { e.stopPropagation(); savedIds.includes(r.id) ? unsaveRecipe(r.id) : saveRecipe(r); }}
                                   title={savedIds.includes(r.id) ? "Saved to Recipes — tap to remove" : "Save to Recipes"}
