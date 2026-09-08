@@ -192,6 +192,7 @@ export default function MealPlanner() {
   const [household, setHouseholdState] = useState(() => (supabase ? getHousehold() : "local"));
   const [codeInput, setCodeInput] = useState("");
   const [showHousehold, setShowHousehold] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   // ---- Load state (Supabase keyed by household code, else localStorage) ----
   function migratePlan(oldPlan) {
@@ -435,6 +436,25 @@ export default function MealPlanner() {
     setPrefs({ diet: "anything", avoid: "", dislikes: "", notes: "" });
     setPrefsDraft({ diet: "anything", avoid: "", dislikes: "", notes: "" });
     setShowHousehold(false);
+  }
+
+  // Force the PWA to fetch the latest deploy: clear caches, drop the service
+  // worker, and hard-reload. Fixes "new features aren't showing" on the app.
+  async function forceUpdate() {
+    setUpdating(true);
+    try {
+      if ("caches" in window) {
+        const names = await caches.keys();
+        await Promise.all(names.map((n) => caches.delete(n)));
+      }
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+    } catch (e) {
+      // even if clearing fails, still try a hard reload
+    }
+    window.location.reload();
   }
 
   function savePrefs() {
@@ -1017,6 +1037,15 @@ export default function MealPlanner() {
                     width: "100%", padding: "8px", background: "transparent", color: C.sub, border: `1px solid ${C.line}`, borderRadius: 8,
                     fontSize: 12.5, cursor: "pointer",
                   }}>Leave this device</button>
+                  <div style={{ borderTop: `1px solid ${C.line}`, margin: "10px 0 0", paddingTop: 10 }}>
+                    <button onClick={forceUpdate} disabled={updating} style={{
+                      width: "100%", padding: "9px", background: C.clay, color: "#fff", border: "none", borderRadius: 8,
+                      fontSize: 13, fontWeight: 600, cursor: updating ? "wait" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                    }}>
+                      <RefreshCw size={14} /> {updating ? "Updating…" : "Update app to latest"}
+                    </button>
+                    <div style={{ fontSize: 11, color: C.sub, marginTop: 6, lineHeight: 1.4 }}>Use this if new features aren't showing up.</div>
+                  </div>
                 </div>
               )}
             </div>
