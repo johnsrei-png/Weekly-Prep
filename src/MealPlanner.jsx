@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge, Search, Star, Pencil } from "lucide-react";
+import { Calendar, ShoppingCart, Package, Plus, X, Check, Download, RefreshCw, Trash2, Utensils, Sparkles, Minus, AlertTriangle, BookOpen, Send, MessageCircle, CalendarPlus, GripVertical, SlidersHorizontal, ChevronDown, Home, Archive, Camera, Bookmark, DollarSign, GitMerge, Search, Star, Pencil, FolderPlus } from "lucide-react";
 import { supabase, getHousehold, setHousehold, clearHousehold, normalizeCode, suggestCode } from "./supabase.js";
 import { STAPLES, STAPLE_INDEX } from "./staples.js";
 
@@ -152,6 +152,10 @@ export default function MealPlanner() {
   const [tripHidden, setTripHidden] = useState([]);  // item keys taken off for this shopping trip only
   const [extras, setExtras] = useState([]);          // [{id, text, recurring, done}] non-pantry grocery add-ons
   const [ratings, setRatings] = useState({});        // recipeId -> 1..5 stars
+  const [recipeCats, setRecipeCats] = useState(["Breakfast", "Lunch", "Dinner", "Snacks"]); // customizable category names
+  const [recipeCatMap, setRecipeCatMap] = useState({}); // recipeId -> [category names]
+  const [catPickup, setCatPickup] = useState(null);  // recipe id "picked up" to assign to a category
+  const [newCatInput, setNewCatInput] = useState("");
   const [extraInput, setExtraInput] = useState("");
   const [diet, setDiet] = useState("anything");
   const [defaultServings, setDefaultServings] = useState(4);
@@ -222,6 +226,8 @@ export default function MealPlanner() {
     setSavedIds(s.savedIds || []);
     setExtras(s.extras || []);
     setRatings(s.ratings || {});
+    if (s.recipeCats) setRecipeCats(s.recipeCats);
+    setRecipeCatMap(s.recipeCatMap || {});
   }
 
   useEffect(() => {
@@ -242,14 +248,14 @@ export default function MealPlanner() {
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded) return;
-    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings };
+    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap };
     if (supabase) {
       if (!household) return;
       supabase.from("meal_planner").upsert({ device_id: household, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, loaded, household]);
+  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap, loaded, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -856,6 +862,43 @@ export default function MealPlanner() {
   function unsaveRecipe(id) {
     setSavedIds((prev) => prev.filter((x) => x !== id));
   }
+  // ---- Recipe categories -------------------------------------------------
+  function assignCat(recipeId, cat) {
+    setRecipeCatMap((prev) => {
+      const cur = prev[recipeId] || [];
+      const next = cur.includes(cat) ? cur.filter((c) => c !== cat) : [...cur, cat];  // toggle
+      const map = { ...prev };
+      if (next.length) map[recipeId] = next; else delete map[recipeId];
+      return map;
+    });
+  }
+  function addRecipeCat(name) {
+    const n = (name || "").trim();
+    if (!n || recipeCats.includes(n)) return;
+    setRecipeCats((prev) => [...prev, n]);
+  }
+  function renameRecipeCat(oldName, newName) {
+    const n = (newName || "").trim();
+    if (!n || (n !== oldName && recipeCats.includes(n))) return;
+    setRecipeCats((prev) => prev.map((c) => (c === oldName ? n : c)));
+    setRecipeCatMap((prev) => {
+      const map = {};
+      Object.entries(prev).forEach(([rid, cats]) => { map[rid] = cats.map((c) => (c === oldName ? n : c)); });
+      return map;
+    });
+  }
+  function removeRecipeCat(name) {
+    setRecipeCats((prev) => prev.filter((c) => c !== name));
+    setRecipeCatMap((prev) => {
+      const map = {};
+      Object.entries(prev).forEach(([rid, cats]) => {
+        const kept = cats.filter((c) => c !== name);
+        if (kept.length) map[rid] = kept;
+      });
+      return map;
+    });
+  }
+
   function setRating(id, stars) {
     setRatings((prev) => {
       const next = { ...prev };
@@ -1119,6 +1162,74 @@ export default function MealPlanner() {
             </p>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  // Renders one saved-recipe card (used within each category group).
+  function renderRecipeCard(r) {
+    const cats = recipeCatMap[r.id] || [];
+    const pickedUp = catPickup === r.id;
+    return (
+      <div key={r.id} style={{ background: C.cream, border: `1px solid ${pickedUp ? C.clay : C.line}`, borderRadius: 12, padding: isMobile ? "12px 14px" : "14px 16px", fontFamily: uiFont, outline: pickedUp ? `1px dashed ${C.clay}` : "none", outlineOffset: -3 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 160px" }}>
+            <div style={{ fontSize: 16, fontWeight: 600, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
+            <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>{r.time} min · makes {r.servings} · {(r.tags || []).slice(0, 3).join(", ")}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 2, marginTop: 6 }}>
+              {[1, 2, 3, 4, 5].map((s) => (
+                <button key={s} onClick={() => setRating(r.id, s)} title={`${s} star${s > 1 ? "s" : ""}`} style={{ background: "none", border: "none", cursor: "pointer", padding: 1, display: "flex" }}>
+                  <Star size={17} color={C.clay} fill={(ratings[r.id] || 0) >= s ? C.clay : "none"} />
+                </button>
+              ))}
+            </div>
+            {cats.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                {cats.map((c) => (
+                  <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: C.sageD, background: C.chip, borderRadius: 10, padding: "2px 8px" }}>
+                    {c}
+                    <button onClick={() => assignCat(r.id, c)} title={`Remove from ${c}`} style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 0 }}><X size={11} /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => setCatPickup(pickedUp ? null : r.id)} title={pickedUp ? "Tap a category below to add it" : "Categorize"} style={{
+              ...stepBtn(C), width: "auto", padding: "0 10px", height: 32, gap: 5, fontSize: 12, fontWeight: 600,
+              background: pickedUp ? C.clay : C.cream, color: pickedUp ? "#fff" : C.sageD, borderColor: pickedUp ? C.clay : C.line,
+            }}><FolderPlus size={14} /> {isMobile ? "" : "Categorize"}</button>
+            <button onClick={() => setAddingSavedFor(addingSavedFor?.recipeId === r.id ? null : { recipeId: r.id, meal: (r.tags || []).includes("breakfast") ? "breakfast" : (r.tags || []).includes("lunch") ? "lunch" : "dinner" })} style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff",
+              border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer",
+            }}><CalendarPlus size={14} /> {isMobile ? "Add" : "Add to plan"}</button>
+            <button onClick={() => unsaveRecipe(r.id)} title="Remove from library" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 4 }}>
+              <Trash2 size={17} />
+            </button>
+          </div>
+        </div>
+
+        {addingSavedFor?.recipeId === r.id && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Which meal?</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+              {MEALS.map((mm) => (
+                <button key={mm.id} onClick={() => setAddingSavedFor({ recipeId: r.id, meal: mm.id })} style={{
+                  padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 500,
+                  border: `1px solid ${addingSavedFor.meal === mm.id ? C.sage : C.line}`,
+                  background: addingSavedFor.meal === mm.id ? C.sage : C.cream, color: addingSavedFor.meal === mm.id ? "#fff" : C.ink,
+                }}>{mm.label}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Add to which day?</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {DAYS.map((d) => (
+                <button key={d} onClick={() => { addRecipeToSlot(r, d, addingSavedFor.meal); setAddingSavedFor(null); setTab("plan"); }} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: C.cream, fontSize: 12, cursor: "pointer" }}>{d.slice(0, 3)}</button>
+              ))}
+              <button onClick={() => setAddingSavedFor(null)} style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: "transparent", color: C.sub, fontSize: 12, cursor: "pointer" }}>cancel</button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1598,65 +1709,82 @@ export default function MealPlanner() {
               </div>
             )}
 
-            {/* Saved library */}
-            <h3 style={{ fontFamily: uiFont, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.sageD, marginBottom: 8 }}>
-              Saved recipes ({savedRecipes.length})
-            </h3>
-            {savedRecipes.length === 0 ? (
-              <Empty C={C} icon={BookOpen} title="No saved recipes yet." sub="Add a photo above, or save recipes from your week." />
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {savedRecipes.map((r) => (
-                  <div key={r.id} style={{ background: C.cream, border: `1px solid ${C.line}`, borderRadius: 12, padding: isMobile ? "12px 14px" : "14px 16px", fontFamily: uiFont }}>
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-                      <div style={{ flex: "1 1 160px" }}>
-                        <div style={{ fontSize: 16, fontWeight: 600, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 }} onClick={() => setViewRecipe(r)}>{r.name}</div>
-                        <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>{r.time} min · makes {r.servings} · {(r.tags || []).slice(0, 3).join(", ")}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 2, marginTop: 6 }}>
-                          {[1, 2, 3, 4, 5].map((s) => (
-                            <button key={s} onClick={() => setRating(r.id, s)} title={`${s} star${s > 1 ? "s" : ""}`} style={{ background: "none", border: "none", cursor: "pointer", padding: 1, display: "flex" }}>
-                              <Star size={17} color={C.clay} fill={(ratings[r.id] || 0) >= s ? C.clay : "none"} />
-                            </button>
-                          ))}
-                          {ratings[r.id] > 0 && <span style={{ fontSize: 11, color: C.sub, marginLeft: 4 }}>tap again to clear</span>}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <button onClick={() => setAddingSavedFor(addingSavedFor?.recipeId === r.id ? null : { recipeId: r.id, meal: (r.tags || []).includes("breakfast") ? "breakfast" : (r.tags || []).includes("lunch") ? "lunch" : "dinner" })} style={{
-                          display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff",
-                          border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer",
-                        }}><CalendarPlus size={14} /> Add to plan</button>
-                        <button onClick={() => unsaveRecipe(r.id)} title="Remove from library" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 4 }}>
-                          <Trash2 size={17} />
-                        </button>
-                      </div>
-                    </div>
+            {/* Saved library, grouped by category */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+              <h3 style={{ fontFamily: uiFont, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.sageD, margin: 0 }}>
+                Saved recipes ({savedRecipes.length})
+              </h3>
+            </div>
 
-                    {addingSavedFor?.recipeId === r.id && (
-                      <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
-                        <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Which meal?</div>
-                        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-                          {MEALS.map((mm) => (
-                            <button key={mm.id} onClick={() => setAddingSavedFor({ recipeId: r.id, meal: mm.id })} style={{
-                              padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 500,
-                              border: `1px solid ${addingSavedFor.meal === mm.id ? C.sage : C.line}`,
-                              background: addingSavedFor.meal === mm.id ? C.sage : C.cream, color: addingSavedFor.meal === mm.id ? "#fff" : C.ink,
-                            }}>{mm.label}</button>
-                          ))}
-                        </div>
-                        <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Add to which day?</div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                          {DAYS.map((d) => (
-                            <button key={d} onClick={() => { addRecipeToSlot(r, d, addingSavedFor.meal); setAddingSavedFor(null); setTab("plan"); }} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: C.cream, fontSize: 12, cursor: "pointer" }}>{d.slice(0, 3)}</button>
-                          ))}
-                          <button onClick={() => setAddingSavedFor(null)} style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: "transparent", color: C.sub, fontSize: 12, cursor: "pointer" }}>cancel</button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
+            {catPickup && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#FBF1DC", border: `1px solid ${C.clay}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontFamily: uiFont, fontSize: 14 }}>
+                <span>Categorizing — tap a category heading below to add/remove it.</span>
+                <button onClick={() => setCatPickup(null)} style={{ background: "none", border: `1px solid ${C.clay}`, color: C.clay, borderRadius: 8, padding: "4px 12px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Done</button>
               </div>
             )}
+
+            {savedRecipes.length === 0 ? (
+              <Empty C={C} icon={BookOpen} title="No saved recipes yet." sub="Add a photo above, or save recipes from your week." />
+            ) : (() => {
+              const uncategorized = savedRecipes.filter((r) => !(recipeCatMap[r.id]?.length));
+              return (
+                <div style={{ display: "grid", gap: 20 }}>
+                  {recipeCats.map((cat) => {
+                    const inCat = savedRecipes.filter((r) => (recipeCatMap[r.id] || []).includes(cat));
+                    return (
+                      <div key={cat}>
+                        <div
+                          onClick={() => { if (catPickup) assignCat(catPickup, cat); }}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontFamily: uiFont,
+                            cursor: catPickup ? "pointer" : "default",
+                            background: catPickup ? "#EEF2E8" : "transparent", border: catPickup ? `1px dashed ${C.sage}` : "1px solid transparent",
+                            borderRadius: 8, padding: catPickup ? "6px 10px" : "0",
+                          }}>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{cat}</span>
+                          <span style={{ fontSize: 12, color: C.sub }}>({inCat.length})</span>
+                          {catPickup && <span style={{ fontSize: 12, color: C.sageD, marginLeft: "auto" }}>tap to {(recipeCatMap[catPickup] || []).includes(cat) ? "remove" : "add"}</span>}
+                          {!catPickup && (
+                            <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+                              <button onClick={() => { const n = prompt(`Rename "${cat}" to:`, cat); if (n) renameRecipeCat(cat, n); }} title="Rename category" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 2 }}><Pencil size={13} /></button>
+                              <button onClick={() => { if (confirm(`Remove the "${cat}" category? Recipes stay saved, just uncategorized from it.`)) removeRecipeCat(cat); }} title="Remove category" style={{ background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 2 }}><X size={14} /></button>
+                            </div>
+                          )}
+                        </div>
+                        {inCat.length > 0 ? (
+                          <div style={{ display: "grid", gap: 10 }}>{inCat.map(renderRecipeCard)}</div>
+                        ) : (
+                          <div style={{ fontFamily: uiFont, fontSize: 13, color: C.sub, fontStyle: "italic", paddingLeft: 2 }}>No recipes here yet.</div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* Add a new category */}
+                  <div style={{ display: "flex", gap: 8, fontFamily: uiFont }}>
+                    <input
+                      value={newCatInput}
+                      onChange={(e) => setNewCatInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { addRecipeCat(newCatInput); setNewCatInput(""); } }}
+                      placeholder="New category…"
+                      style={{ flex: "0 1 200px", padding: "9px 12px", borderRadius: 9, border: `1px solid ${C.line}`, fontSize: 14, background: C.cream }}
+                    />
+                    <button onClick={() => { addRecipeCat(newCatInput); setNewCatInput(""); }} disabled={!newCatInput.trim()} style={{
+                      display: "flex", alignItems: "center", gap: 5, padding: "9px 14px", borderRadius: 9, border: "none",
+                      background: newCatInput.trim() ? C.sage : C.line, color: newCatInput.trim() ? "#fff" : C.sub, fontSize: 14, fontWeight: 600, cursor: newCatInput.trim() ? "pointer" : "default",
+                    }}><Plus size={15} /> Add category</button>
+                  </div>
+
+                  {/* Uncategorized */}
+                  {uncategorized.length > 0 && (
+                    <div>
+                      <div style={{ fontFamily: uiFont, fontSize: 14, fontWeight: 700, color: C.sub, marginBottom: 8 }}>Uncategorized <span style={{ fontWeight: 400, fontSize: 12 }}>({uncategorized.length})</span></div>
+                      <div style={{ display: "grid", gap: 10 }}>{uncategorized.map(renderRecipeCard)}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 
