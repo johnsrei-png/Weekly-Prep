@@ -944,17 +944,25 @@ export default function MealPlanner() {
     sage: "#6B7B5A", sageD: "#54634A", clay: "#C67B4E", cream: "#FFFFFF", chip: "#F0EADB", amber: "#B8862E",
   };
 
-  const tabBtn = (id, label, Icon, badge) => (
-    <button onClick={() => setTab(id)} style={{
-      display: "flex", alignItems: "center", justifyContent: "center", gap: isMobile ? 5 : 8,
-      padding: isMobile ? "10px 8px" : "10px 18px", border: "none", flex: isMobile ? "1 1 0" : "0 0 auto",
-      cursor: "pointer", borderRadius: 10, fontSize: isMobile ? 13 : 15, fontWeight: 600, transition: "all .15s",
-      background: tab === id ? C.sage : "transparent", color: tab === id ? "#fff" : C.sub, whiteSpace: "nowrap", minWidth: 0,
-    }}>
-      <Icon size={isMobile ? 16 : 18} style={{ flexShrink: 0 }} /> <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
-      {badge > 0 && <span style={{ background: tab === id ? "rgba(255,255,255,.25)" : C.clay, color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 11, flexShrink: 0 }}>{badge}</span>}
-    </button>
-  );
+  const tabBtn = (id, label, Icon, badge) => {
+    const active = tab === id;
+    // On mobile, only the active tab shows its text label; inactive tabs are
+    // icon + badge only, which keeps everything roomy on a narrow screen.
+    const showLabel = !isMobile || active;
+    return (
+      <button onClick={() => setTab(id)} style={{
+        display: "flex", alignItems: "center", justifyContent: "center", gap: isMobile ? 6 : 8,
+        padding: isMobile ? "10px 10px" : "10px 18px", border: "none",
+        flex: isMobile ? (active ? "2 1 0" : "1 1 0") : "0 0 auto",
+        cursor: "pointer", borderRadius: 10, fontSize: isMobile ? 13 : 15, fontWeight: 600, transition: "all .15s",
+        background: active ? C.sage : "transparent", color: active ? "#fff" : C.sub, whiteSpace: "nowrap", minWidth: 0,
+      }}>
+        <Icon size={isMobile ? 17 : 18} style={{ flexShrink: 0 }} />
+        {showLabel && <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>}
+        {badge > 0 && <span style={{ background: active ? "rgba(255,255,255,.25)" : C.clay, color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 11, flexShrink: 0 }}>{badge}</span>}
+      </button>
+    );
+  };
 
   const uiFont = "system-ui, -apple-system, sans-serif";
 
