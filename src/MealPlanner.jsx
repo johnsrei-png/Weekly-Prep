@@ -146,7 +146,17 @@ export default function MealPlanner() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const [recipes, setRecipes] = useState(SEED_RECIPES);
-  const [plan, setPlan] = useState({});           // { Monday: {recipeId, servings} }
+  const [weeks, setWeeks] = useState({ this: {}, next: {} });  // two live weeks
+  const [activeWeek, setActiveWeek] = useState("this");        // which one you're viewing
+  const plan = weeks[activeWeek] || {};
+  // setPlan proxies to the active week so all existing plan code works unchanged.
+  const setPlan = (updater) => {
+    setWeeks((prev) => {
+      const cur = prev[activeWeek] || {};
+      const nextPlan = typeof updater === "function" ? updater(cur) : updater;
+      return { ...prev, [activeWeek]: nextPlan };
+    });
+  };
   const [inventory, setInventory] = useState([]); // [{item, qty, unit, lowAt}]
   const [checked, setChecked] = useState({});
   const [tripHidden, setTripHidden] = useState([]);  // item keys taken off for this shopping trip only
@@ -216,7 +226,13 @@ export default function MealPlanner() {
 
   function applyState(s) {
     setRecipes(s.recipes || SEED_RECIPES);
-    setPlan(migratePlan(s.plan));
+    // migrate: old saves had a single `plan`; new saves have `weeks`
+    if (s.weeks) {
+      setWeeks({ this: migratePlan(s.weeks.this), next: migratePlan(s.weeks.next) });
+    } else {
+      setWeeks({ this: migratePlan(s.plan), next: {} });
+    }
+    setActiveWeek(s.activeWeek === "next" ? "next" : "this");
     setInventory(s.inventory || []);
     setChecked(s.checked || {});
     if (s.defaultServings) setDefaultServings(s.defaultServings);
@@ -248,14 +264,14 @@ export default function MealPlanner() {
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded) return;
-    const state = { recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap };
+    const state = { recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap };
     if (supabase) {
       if (!household) return;
       supabase.from("meal_planner").upsert({ device_id: household, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, plan, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap, loaded, household]);
+  }, [recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap, loaded, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -442,7 +458,7 @@ export default function MealPlanner() {
     clearHousehold();
     setHouseholdState("");
     // reset to a clean slate locally so the next household starts fresh in the UI
-    setRecipes(SEED_RECIPES); setPlan({}); setInventory([]); setChecked({});
+    setRecipes(SEED_RECIPES); setWeeks({ this: {}, next: {} }); setActiveWeek("this"); setInventory([]); setChecked({});
     setPrefs({ diet: "anything", avoid: "", dislikes: "", notes: "" });
     setPrefsDraft({ diet: "anything", avoid: "", dislikes: "", notes: "" });
     setShowHousehold(false);
@@ -820,15 +836,20 @@ export default function MealPlanner() {
       id: `week_${now.getTime()}`,
       label: `Week of ${label}`,
       savedAt: now.toISOString(),
-      plan,            // snapshot of the current plan
-      grocery,         // snapshot of the grocery list
+      plan,            // snapshot of the week being archived
+      grocery,
     };
     setArchives((prev) => [entry, ...prev]);
-    // Start a fresh, empty week.
-    setPlan({});
     setChecked({});
-    // Keep recurring extras (uncheck them for the new trip), drop one-time ones.
     setExtras((prev) => prev.filter((x) => x.recurring).map((x) => ({ ...x, done: false })));
+
+    // Roll forward: if archiving "this" week, slide "next" into "this" and empty "next".
+    // If archiving "next", just empty "next".
+    setWeeks((prev) => {
+      if (activeWeek === "this") return { this: prev.next || {}, next: {} };
+      return { ...prev, next: {} };
+    });
+    setActiveWeek("this");
     setShowArchives(true);
   }
 
@@ -1307,6 +1328,24 @@ export default function MealPlanner() {
         {/* ---------------- PLAN ---------------- */}
         {tab === "plan" && (
           <div>
+            {/* Week toggle */}
+            <div style={{ display: "flex", gap: 6, background: C.chip, padding: 4, borderRadius: 12, marginBottom: 14, fontFamily: uiFont }}>
+              {[{ id: "this", label: "This week" }, { id: "next", label: "Next week" }].map((w) => {
+                const active = activeWeek === w.id;
+                const count = Object.values(weeks[w.id] || {}).reduce((n, dp) => n + Object.keys(dp || {}).filter((k) => k !== "snacks").length, 0);
+                return (
+                  <button key={w.id} onClick={() => setActiveWeek(w.id)} style={{
+                    flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 12px", border: "none",
+                    borderRadius: 9, fontSize: 14, fontWeight: 600, cursor: "pointer", transition: "all .15s",
+                    background: active ? C.sage : "transparent", color: active ? "#fff" : C.sub,
+                  }}>
+                    {w.label}
+                    {count > 0 && <span style={{ background: active ? "rgba(255,255,255,.25)" : C.line, color: active ? "#fff" : C.sub, borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>{count}</span>}
+                  </button>
+                );
+              })}
+            </div>
+
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12, fontFamily: uiFont }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 14, color: C.sub }}>Servings:</span>
@@ -1629,7 +1668,7 @@ export default function MealPlanner() {
                   background: planIsEmpty() ? C.line : C.clay, color: planIsEmpty() ? C.sub : "#fff",
                   fontSize: 14, fontWeight: 600, cursor: planIsEmpty() ? "default" : "pointer",
                 }}>
-                  <Archive size={16} /> Archive & start new week
+                  <Archive size={16} /> Archive {activeWeek === "this" ? "this week" : "next week"}
                 </button>
                 {archives.length > 0 && (
                   <button onClick={() => setShowArchives((v) => !v)} style={{
