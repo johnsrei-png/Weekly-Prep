@@ -170,6 +170,7 @@ export default function MealPlanner() {
   const [diet, setDiet] = useState("anything");
   const [defaultServings, setDefaultServings] = useState(4);
   const [loaded, setLoaded] = useState(false);
+  const [loadOk, setLoadOk] = useState(false);   // true only after a confirmed good load — gates autosave
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState("");
   const [newInv, setNewInv] = useState({ item: "", qty: "", unit: "oz", lowAt: "" });
@@ -249,13 +250,26 @@ export default function MealPlanner() {
   useEffect(() => {
     (async () => {
       setLoaded(false);
+      setLoadOk(false);
       if (supabase) {
         if (!household) { setLoaded(true); return; } // wait for a code
-        const { data } = await supabase.from("meal_planner").select("*").eq("device_id", household).maybeSingle();
-        if (data?.state) applyState(data.state);
+        try {
+          const { data, error } = await supabase.from("meal_planner").select("*").eq("device_id", household).maybeSingle();
+          if (error) {
+            // fetch failed — do NOT mark load OK, so we never overwrite good data with empty state
+            setLoaded(true);
+            return;
+          }
+          if (data?.state) applyState(data.state);
+          setLoadOk(true);   // a clean fetch (even if the row is new/empty) — safe to save now
+        } catch (e) {
+          setLoaded(true);
+          return;            // network error: leave loadOk false so autosave stays blocked
+        }
       } else {
         const raw = localStorage.getItem("wt_state");
         if (raw) applyState(JSON.parse(raw));
+        setLoadOk(true);
       }
       setLoaded(true);
     })();
@@ -263,7 +277,7 @@ export default function MealPlanner() {
 
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || !loadOk) return;   // never save until we've confirmed a good load
     const state = { recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap };
     if (supabase) {
       if (!household) return;
@@ -271,7 +285,7 @@ export default function MealPlanner() {
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap, loaded, household]);
+  }, [recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap, loaded, loadOk, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -1257,6 +1271,8 @@ export default function MealPlanner() {
 
   if (!loaded) return <div style={{ padding: 40, fontFamily: uiFont, color: "#7A7264" }}>Loading your kitchen…</div>;
 
+  const loadFailed = supabase && household && loaded && !loadOk;
+
   return (
     <div style={{ fontFamily: "Georgia, serif", background: C.bg, minHeight: "100vh", color: C.ink }}>
       <div style={{ maxWidth: 900, margin: "0 auto", padding: isMobile ? "18px 14px 48px" : "28px 20px 60px" }}>
@@ -1308,6 +1324,15 @@ export default function MealPlanner() {
             </div>
           )}
         </div>
+
+        {/* Load-failed banner — data is safe, just couldn't fetch */}
+        {loadFailed && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#FBE9E7", border: "1px solid #B4442E", borderRadius: 12, padding: "12px 16px", margin: "18px 0", fontFamily: uiFont, fontSize: 14, flexWrap: "wrap" }}>
+            <AlertTriangle size={18} color="#B4442E" />
+            <span style={{ flex: 1 }}>Couldn't load your saved data (connection issue). Your data is safe — nothing has been changed or saved over. Reload to try again.</span>
+            <button onClick={() => window.location.reload()} style={{ padding: "6px 14px", background: "#B4442E", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Reload</button>
+          </div>
+        )}
 
         {/* Low-stock banner */}
         {lowStock.length > 0 && (
