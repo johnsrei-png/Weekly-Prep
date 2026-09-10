@@ -160,10 +160,12 @@ export default function MealPlanner() {
   const [inventory, setInventory] = useState([]); // [{item, qty, unit, lowAt}]
   const [checked, setChecked] = useState({});
   const [tripHidden, setTripHidden] = useState([]);  // item keys taken off for this shopping trip only
+  const [grocMergeFrom, setGrocMergeFrom] = useState(null);  // grocery item name being merged into another
   const [extras, setExtras] = useState([]);          // [{id, text, recurring, done}] non-pantry grocery add-ons
   const [ratings, setRatings] = useState({});        // recipeId -> 1..5 stars
   const [recipeCats, setRecipeCats] = useState(["Breakfast", "Lunch", "Dinner", "Snacks"]); // customizable category names
   const [recipeCatMap, setRecipeCatMap] = useState({}); // recipeId -> [category names]
+  const [aliases, setAliases] = useState({}); // { "alias name": "canonical name" } — merges duplicate item names
   const [catPickup, setCatPickup] = useState(null);  // recipe id "picked up" to assign to a category
   const [newCatInput, setNewCatInput] = useState("");
   const [extraInput, setExtraInput] = useState("");
@@ -246,6 +248,7 @@ export default function MealPlanner() {
     setRatings(s.ratings || {});
     if (s.recipeCats) setRecipeCats(s.recipeCats);
     setRecipeCatMap(s.recipeCatMap || {});
+    setAliases(s.aliases || {});
   }
 
   useEffect(() => {
@@ -279,14 +282,14 @@ export default function MealPlanner() {
   // ---- Persist on any change ----------------------------------------------
   useEffect(() => {
     if (!loaded || !loadOk) return;   // never save until we've confirmed a good load
-    const state = { recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap };
+    const state = { recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap, aliases };
     if (supabase) {
       if (!household) return;
       supabase.from("meal_planner").upsert({ device_id: household, state, updated_at: new Date().toISOString() }).then(() => {});
     } else {
       localStorage.setItem("wt_state", JSON.stringify(state));
     }
-  }, [recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap, loaded, loadOk, household]);
+  }, [recipes, weeks, activeWeek, inventory, checked, defaultServings, prefs, archives, savedIds, extras, ratings, recipeCats, recipeCatMap, aliases, loaded, loadOk, household]);
 
   const filteredRecipes = useMemo(() => {
     if (diet === "anything") return recipes;
@@ -528,6 +531,9 @@ export default function MealPlanner() {
   }
 
   // ---- Aggregate ingredients (scaled by per-day servings) -----------------
+  // Resolve an item name through the alias map to its canonical name.
+  const canon = (name) => aliases[norm(name)] || name;
+
   const aggregated = useMemo(() => {
     // Meal-prep model: each distinct recipe is cooked ONCE per week (one batch
     // at its own serving size), no matter how many days/slots it appears on.
@@ -549,13 +555,14 @@ export default function MealPlanner() {
       if (!r) return;
       const scale = defaultServings / (r.servings || 1);   // match the popup's scaling
       r.ingredients.forEach((ing) => {
-        const key = norm(ing.item) + "|" + ing.unit;
-        if (!map[key]) map[key] = { ...ing, qty: 0 };
+        const name = canon(ing.item);                       // resolve aliases so duplicates merge
+        const key = norm(name) + "|" + ing.unit;
+        if (!map[key]) map[key] = { ...ing, item: name, qty: 0 };
         map[key].qty += ing.qty * scale;   // one batch, scaled to the chosen serving size
       });
     });
     return Object.values(map);
-  }, [plan, recipes, defaultServings]);
+  }, [plan, recipes, defaultServings, aliases]);
 
   // How many day-slots each recipe fills this week (for the "cooked once, eaten N days" note)
   const recipeUsage = useMemo(() => {
@@ -842,6 +849,21 @@ export default function MealPlanner() {
     // hide for this trip only (resets when the plan changes / next week)
     const key = norm(n.item) + "|" + (n.unit || "");
     setTripHidden((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  }
+
+  // Merge grocery item `fromName` into `toName` and remember it forever
+  // (an alias), so the two names combine automatically on every future list.
+  function mergeGrocery(fromName, toName) {
+    const from = norm(fromName);
+    const to = norm(toName);
+    if (from === to) { setGrocMergeFrom(null); return; }
+    setAliases((prev) => {
+      const next = { ...prev, [from]: toName };
+      // repoint any existing aliases that pointed at the old name
+      Object.keys(next).forEach((k) => { if (norm(next[k]) === from) next[k] = toName; });
+      return next;
+    });
+    setGrocMergeFrom(null);
   }
 
   // ---- Week archive ------------------------------------------------------
@@ -1923,6 +1945,12 @@ export default function MealPlanner() {
                     <span style={{ fontSize: 12.5, color: C.sub }}>rough estimate · average US prices, not your store or current sales</span>
                   </div>
                 )}
+                {grocMergeFrom && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#FBF1DC", border: `1px solid ${C.clay}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontFamily: uiFont, fontSize: 14 }}>
+                    <span>Merging <strong>{grocMergeFrom}</strong> — tap the item to combine it into (remembered for next time).</span>
+                    <button onClick={() => setGrocMergeFrom(null)} style={{ background: "none", border: `1px solid ${C.clay}`, color: C.clay, borderRadius: 8, padding: "4px 12px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancel</button>
+                  </div>
+                )}
                 {CAT_ORDER.map((cat) => {
                   const arr = groceryList[cat];
                   if (!arr?.length) return null;
@@ -1933,15 +1961,25 @@ export default function MealPlanner() {
                         {arr.map((n, i) => {
                           const key = norm(n.item) + n.unit;
                           const done = checked[key];
+                          const isMergeSource = grocMergeFrom && norm(grocMergeFrom) === norm(n.item);
+                          const isMergeTarget = grocMergeFrom && !isMergeSource;
                           return (
-                            <div key={key} onClick={() => toggleCheck(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none", cursor: "pointer" }}>
-                              <div style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${done ? C.sage : C.line}`, background: done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>{done && <Check size={14} color="#fff" />}</div>
-                              <span style={{ flex: 1, fontFamily: uiFont, fontSize: 15, textDecoration: done ? "line-through" : "none", color: done ? C.sub : C.ink }}>
+                            <div key={key}
+                              onClick={() => { if (isMergeTarget) mergeGrocery(grocMergeFrom, n.item); else if (!grocMergeFrom) toggleCheck(key); }}
+                              style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? `1px solid ${C.line}` : "none", cursor: "pointer", background: isMergeSource ? "#FBF1DC" : "transparent", outline: isMergeTarget ? `1px dashed ${C.sage}` : "none", outlineOffset: -3 }}>
+                              {!grocMergeFrom && <div style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${done ? C.sage : C.line}`, background: done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>{done && <Check size={14} color="#fff" />}</div>}
+                              <span style={{ flex: 1, fontFamily: uiFont, fontSize: 15, textDecoration: done && !grocMergeFrom ? "line-through" : "none", color: done && !grocMergeFrom ? C.sub : C.ink }}>
                                 {n.isSnack ? n.item : <><strong style={{ fontWeight: 600 }}>{fmtGrocery(n.needQty, n.unit)}</strong> {n.item}</>}
+                                {isMergeTarget && <span style={{ color: C.sageD, fontSize: 12, marginLeft: 8 }}>· tap to merge here</span>}
                               </span>
-                              <button onClick={(e) => { e.stopPropagation(); takeOffItem(n); }} title="I already have this — take it off and add to pantry" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", background: "transparent", border: `1px solid ${C.line}`, borderRadius: 14, color: C.sub, fontSize: 12, fontFamily: uiFont, cursor: "pointer", fontWeight: 600 }}>
-                                <Check size={12} /> have it
-                              </button>
+                              {!grocMergeFrom && !n.isSnack && (
+                                <>
+                                  <button onClick={(e) => { e.stopPropagation(); setGrocMergeFrom(n.item); }} title="Merge with another item (remembered)" style={{ flexShrink: 0, background: "none", border: "none", cursor: "pointer", color: C.sub, display: "flex", padding: 4 }}><GitMerge size={16} /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); takeOffItem(n); }} title="I already have this — take it off and add to pantry" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", background: "transparent", border: `1px solid ${C.line}`, borderRadius: 14, color: C.sub, fontSize: 12, fontFamily: uiFont, cursor: "pointer", fontWeight: 600 }}>
+                                    <Check size={12} /> have it
+                                  </button>
+                                </>
+                              )}
                             </div>
                           );
                         })}
