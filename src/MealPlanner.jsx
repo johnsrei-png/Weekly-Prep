@@ -194,7 +194,8 @@ export default function MealPlanner() {
   const [snackInputs, setSnackInputs] = useState({});  // { day: "text being typed" }
   const [parsing, setParsing] = useState(false);       // image parse in progress
   const [parseError, setParseError] = useState("");
-  const [addingSavedFor, setAddingSavedFor] = useState(null); // {recipeId, meal} slot-pick in Recipes tab
+  const [addingSavedFor, setAddingSavedFor] = useState(null); // recipe id whose add-panel is open
+  const [addSlots, setAddSlots] = useState({});               // { "day|meal": true } selected slots to add
   const [receiptParsing, setReceiptParsing] = useState(false);
   const [receiptError, setReceiptError] = useState("");
   const [receiptItems, setReceiptItems] = useState(null);     // [{item, qty, unit, include}] pending review
@@ -386,6 +387,23 @@ export default function MealPlanner() {
       [day]: { ...(prev[day] || {}), [meal]: { recipeId: recipe.id, servings: recipe.servings || defaultServings } },
     }));
     setAddingFor(null);
+  }
+
+  // Add a recipe to many day|meal slots at once (from the Recipes tab).
+  function addRecipeToSlots(recipe, slotKeys) {
+    if (!slotKeys.length) return;
+    setRecipes((prev) => (prev.find((r) => r.id === recipe.id) ? prev : [recipe, ...prev]));
+    setPlan((prev) => {
+      const next = { ...prev };
+      slotKeys.forEach((key) => {
+        const [day, meal] = key.split("|");
+        next[day] = { ...(next[day] || {}), [meal]: { recipeId: recipe.id, servings: recipe.servings || defaultServings } };
+      });
+      return next;
+    });
+    setAddingSavedFor(null);
+    setAddSlots({});
+    setTab("plan");
   }
 
   // Move (swap) a meal between two slots, each identified as "day|meal".
@@ -1234,7 +1252,7 @@ export default function MealPlanner() {
               ...stepBtn(C), width: "auto", padding: "0 10px", height: 32, gap: 5, fontSize: 12, fontWeight: 600,
               background: pickedUp ? C.clay : C.cream, color: pickedUp ? "#fff" : C.sageD, borderColor: pickedUp ? C.clay : C.line,
             }}><FolderPlus size={14} /> {isMobile ? "" : "Categorize"}</button>
-            <button onClick={() => setAddingSavedFor(addingSavedFor?.recipeId === r.id ? null : { recipeId: r.id, meal: (r.tags || []).includes("breakfast") ? "breakfast" : (r.tags || []).includes("lunch") ? "lunch" : "dinner" })} style={{
+            <button onClick={() => { const opening = addingSavedFor?.recipeId !== r.id; setAddingSavedFor(opening ? { recipeId: r.id } : null); setAddSlots({}); }} style={{
               display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: C.sage, color: "#fff",
               border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer",
             }}><CalendarPlus size={14} /> {isMobile ? "Add" : "Add to plan"}</button>
@@ -1244,27 +1262,48 @@ export default function MealPlanner() {
           </div>
         </div>
 
-        {addingSavedFor?.recipeId === r.id && (
+        {addingSavedFor?.recipeId === r.id && (() => {
+          const selected = Object.keys(addSlots).filter((k) => addSlots[k]);
+          return (
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
-            <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Which meal?</div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Tap any slots to add this to ({activeWeek === "this" ? "this week" : "next week"}):</div>
+            <div style={{ display: "grid", gridTemplateColumns: `auto repeat(${MEALS.length}, 1fr)`, gap: 4, marginBottom: 10 }}>
+              <div />
               {MEALS.map((mm) => (
-                <button key={mm.id} onClick={() => setAddingSavedFor({ recipeId: r.id, meal: mm.id })} style={{
-                  padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 500,
-                  border: `1px solid ${addingSavedFor.meal === mm.id ? C.sage : C.line}`,
-                  background: addingSavedFor.meal === mm.id ? C.sage : C.cream, color: addingSavedFor.meal === mm.id ? "#fff" : C.ink,
-                }}>{mm.label}</button>
+                <div key={mm.id} style={{ fontSize: 10.5, fontWeight: 700, color: C.sageD, textTransform: "uppercase", textAlign: "center", letterSpacing: .3, paddingBottom: 2 }}>{isMobile ? mm.label.slice(0, 3) : mm.label}</div>
+              ))}
+              {DAYS.map((d) => (
+                <React.Fragment key={d}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, display: "flex", alignItems: "center", paddingRight: 6 }}>{d.slice(0, 3)}</div>
+                  {MEALS.map((mm) => {
+                    const key = `${d}|${mm.id}`;
+                    const on = addSlots[key];
+                    const occupiedBy = plan[d]?.[mm.id]?.recipeId;
+                    const occupiedOther = occupiedBy && occupiedBy !== r.id;
+                    return (
+                      <button key={key} onClick={() => setAddSlots((p) => ({ ...p, [key]: !p[key] }))} title={occupiedOther ? "This slot has another meal — adding will replace it" : ""} style={{
+                        padding: "8px 4px", borderRadius: 7, fontSize: 11, cursor: "pointer", fontWeight: 600,
+                        border: `1px solid ${on ? C.sage : C.line}`,
+                        background: on ? C.sage : (occupiedOther ? "#FDF6E7" : C.cream),
+                        color: on ? "#fff" : (occupiedOther ? C.amber : C.sub),
+                      }}>{on ? "✓" : (occupiedOther ? "•" : "+")}</button>
+                    );
+                  })}
+                </React.Fragment>
               ))}
             </div>
-            <div style={{ fontSize: 12, color: C.sub, marginBottom: 6 }}>Add to which day?</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {DAYS.map((d) => (
-                <button key={d} onClick={() => { addRecipeToSlot(r, d, addingSavedFor.meal); setAddingSavedFor(null); setTab("plan"); }} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: C.cream, fontSize: 12, cursor: "pointer" }}>{d.slice(0, 3)}</button>
-              ))}
-              <button onClick={() => setAddingSavedFor(null)} style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: "transparent", color: C.sub, fontSize: 12, cursor: "pointer" }}>cancel</button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={() => addRecipeToSlots(r, selected)} disabled={!selected.length} style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 9, border: "none",
+                background: selected.length ? C.sage : C.line, color: selected.length ? "#fff" : C.sub,
+                fontSize: 13, fontWeight: 700, cursor: selected.length ? "pointer" : "default",
+              }}><CalendarPlus size={15} /> Add to {selected.length || ""} {selected.length === 1 ? "slot" : "slots"}</button>
+              <button onClick={() => { setAddingSavedFor(null); setAddSlots({}); }} style={{ padding: "8px 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: "transparent", color: C.sub, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+              {selected.length > 0 && <span style={{ fontSize: 11, color: C.sub }}>• = slot has another meal (will replace)</span>}
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     );
   }
